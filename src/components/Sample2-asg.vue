@@ -108,6 +108,7 @@ resetAnswer();
 </script>
 
 <template>
+<div class="question-area">
   <p>何系の学部出身ですか？</p>
   <button @click="answer('文系')">文系</button>
   <button @click="answer('理系')">理系</button>
@@ -119,6 +120,7 @@ resetAnswer();
   <p>回答状況</p>
   <p>文系：{{ humanities }}　理系：{{ science }}　情報系：{{ information }}</p>
   <button @click="resetAnswer()">回答リセット</button>
+</div>
 </template>
 
 <style scoped>
