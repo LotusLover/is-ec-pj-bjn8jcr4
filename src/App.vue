@@ -1,7 +1,7 @@
 
 <script setup lang="ts">
 // Sample1.vueコンポーネントをインポートします
-import myComponent from './components/Sample2-asg.vue';
+import myComponent from './components/Kaede_Vote.vue';
 
 // Vueのリアクティブ変数とライフサイクルフックをインポートします
 import { ref, onMounted } from 'vue';
