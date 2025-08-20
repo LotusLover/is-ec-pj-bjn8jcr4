@@ -29,7 +29,7 @@ ChartJS.register(
   LinearScale
 );
 
-import { ref } from 'vue';
+
 
 // 入力されたメッセージを保持する変数
 const userMsg = ref('');
