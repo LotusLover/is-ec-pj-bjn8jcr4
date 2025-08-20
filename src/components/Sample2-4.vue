@@ -116,6 +116,12 @@ button {
   margin: 1rem;
 }
 
+button:hover {
+  opacity: 0.8;
+  transition: all 0.3s ease;
+  transform: scale(1.2);
+}
+
 .button-red {
   background: red;
   color: #ffe5e2;
