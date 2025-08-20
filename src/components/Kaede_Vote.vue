@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue';
-import { db } from '../firebase';
-import { collection, addDoc, serverTimestamp, onSnapshot, query, orderBy } from 'firebase/firestore';
+let db;
+let collection, addDoc, serverTimestamp, onSnapshot, query, orderBy;
 
 // 選択肢
 const options = ['A案', 'B案', 'C案'];
@@ -10,7 +10,7 @@ const votes = ref(options.map(() => []));
 
 // 投票を保存する先（pollIdで投票ルームを分けられる）
 const pollId = 'default';
-const votesColRef = collection(db, 'polls', pollId, 'votes');
+let votesColRef;
 
 // 投票済みフラグ（一人一票）
 const hasVoted = ref(false);
@@ -51,6 +51,11 @@ const endCharge = async () => {
   const power = chargeValue.value;
   const idx = selectedIdx.value;
   try {
+    if (!votesColRef) {
+      // 初期化前ならローカルに積むだけで終了
+      votes.value[idx].push(power);
+      return;
+    }
     await addDoc(votesColRef, {
       optionIndex: idx,
       power,
@@ -69,10 +74,16 @@ const endCharge = async () => {
 
 // 起動時にリアルタイム購読を開始し、ローカルに反映
 let unsubscribe = null;
-onMounted(() => {
+onMounted(async () => {
   // 投票済み状態を復元
   hasVoted.value = localStorage.getItem(`kaede_vote_voted_${pollId}`) === '1';
 
+  // Firebaseの動的import
+  const mod = await import('firebase/firestore');
+  ({ collection, addDoc, serverTimestamp, onSnapshot, query, orderBy } = mod);
+  const firebaseMod = await import('../firebase');
+  db = firebaseMod.db;
+  votesColRef = collection(db, 'polls', pollId, 'votes');
   const q = query(votesColRef, orderBy('createdAt', 'asc'));
   unsubscribe = onSnapshot(q, (snap) => {
     const arrs = options.map(() => []);
