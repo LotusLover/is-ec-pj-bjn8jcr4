@@ -114,11 +114,58 @@ resetAnswer();
   <button @click="answer('情報系')">情報系</button>
   <hr />
     <Bar :options="chartOptions" :data="chartData" />
-  <p>{{ livecomment }}</p>
+  <div class='arrow_box'>{{ livecomment }}</div>
   <img src="../assets/jikkyou.png" alt="実況者" />
   <p>回答状況</p>
   <p>文系：{{ humanities }}　理系：{{ science }}　情報系：{{ information }}</p>
   <button @click="resetAnswer()">回答リセット</button>
 </template>
 
-<style scoped></style>
+<style scoped>
+
+button {
+  margin: 1rem;
+}
+
+button:hover {
+  transition: all 0.2s;
+  transform: scale(1.2);
+}
+
+.button-red {
+  background: red;
+  color: #ffe5e2;
+}
+
+.button-blue {
+  background: blue;
+  color: #e2ebff;
+}
+
+.question-area {
+  border: 2rem solid lightseagreen;
+  border-radius: 10px;
+  padding: 1rem;
+}
+
+img {
+  display: block;
+  margin: auto;
+}
+
+.arrow_box{
+    position:relative;
+    width:500px;
+    height:80px;
+    background:#0099FF;
+    padding:10px;
+    text-align:center;
+    color:#FFFFFF;
+    font-size:30px;
+    font-weight:bold;
+    border-radius:10px;
+    -webkit-border-radius:10px;
+    -moz-border-radius:10px;
+}
+
+</style>
