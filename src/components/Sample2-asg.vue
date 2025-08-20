@@ -7,6 +7,69 @@ const science = ref(0);
 const information = ref(0);
 const livecomment = ref('どのような回答が集まるか！');
 
+// 棒グラフ
+import { computed } from 'vue';
+import { Bar } from 'vue-chartjs';
+import {
+  Chart as ChartJS,
+  Title,
+  Tooltip,
+  Legend,
+  BarElement,
+  CategoryScale,
+  LinearScale,
+} from 'chart.js';
+
+ChartJS.register(
+  Title,
+  Tooltip,
+  Legend,
+  BarElement,
+  CategoryScale,
+  LinearScale
+);
+
+const chartOptions = computed(() => {
+  return {
+    responsive: true,
+    plugins: {
+      legend: { display: false },
+    },
+    scales: {
+      x: {
+        border: {
+          color: '#eeeeee',
+        },
+        grid: {
+          display: false,
+        },
+      },
+      y: {
+        suggestedMax: 5,
+        border: {
+          dash: [4],
+          color: '#eeeeee',
+        },
+        ticks: {
+          stepSize: 1,
+        },
+      },
+    },
+  };
+});
+
+const chartData = computed(() => {
+  return {
+    labels: ['文系', '理系', '情報系'],
+    datasets: [
+      {
+        data: [humanities.value, science.value, information.value],
+        backgroundColor: ['red', 'blue', 'green'],
+      },
+    ],
+  };
+});
+
 // 回答があった時に実行される関数
 const answer = (field) => {
   if (field === '文系') {
@@ -31,7 +94,7 @@ if (topFields.length === 1) {
 } else {
     livecomment.value = 'どのような回答が集まるか！';
 }
-  };
+};
 
 // 回答リセットボタンが押された時に実行される関数
 const resetAnswer = () => {
@@ -50,7 +113,9 @@ resetAnswer();
   <button @click="answer('理系')">理系</button>
   <button @click="answer('情報系')">情報系</button>
   <hr />
+    <Bar :options="chartOptions" :data="chartData" />
   <p>{{ livecomment }}</p>
+  <img src="../assets/jikkyou.png" alt="実況者" />
   <p>回答状況</p>
   <p>文系：{{ humanities }}　理系：{{ science }}　情報系：{{ information }}</p>
   <button @click="resetAnswer()">回答リセット</button>
