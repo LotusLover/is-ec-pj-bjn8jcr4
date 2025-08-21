@@ -563,7 +563,7 @@ function computeSpawnForVote(idx, power) {
         <div v-for="(opt, idx) in options" :key="'spot-' + idx" class="spot" :ref="el => (spotRefs[idx] = el)" :style="{ borderColor: optionColors[idx] || defaultPalette[idx % defaultPalette.length] }">
           <div class="spot-center" :style="{ background: optionColors[idx] || defaultPalette[idx % defaultPalette.length] }"></div>
           <div class="option-label">{{ opt }}</div>
-          <div class="ball-count">{{ votes[idx].length }}票</div>
+          <div class="ball-count">{{ (votes[idx]?.length) || 0 }}票</div>
         </div>
         <!-- 集合中のボール群 -->
         <div v-for="(opt, idx) in options" :key="'balls-' + idx">
