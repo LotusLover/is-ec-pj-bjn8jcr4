@@ -187,12 +187,15 @@ const endCharge = async () => {
     requestAnimationFrame(() => {
       ball.left = destX;
       ball.top = destY;
-      ball.arrived = true;
+      // 到着判定はトランジション完了相当タイミングで付与
+      setTimeout(() => {
+        ball.arrived = true;
+        nextTick().then(syncPhysicsWithVotes);
+      }, 600);
     });
-    // 一定時間後にオーバーレイから除去
+    // 少し余裕を持ってオーバーレイから除去
     setTimeout(() => {
       flyingBalls.value = flyingBalls.value.filter(b => b.id !== id);
-      // 飛翔終了時に即座にクラスタを再同期（最新票を反映）
       nextTick().then(syncPhysicsWithVotes);
     }, 700);
   } catch (_) {}
@@ -204,12 +207,10 @@ const endCharge = async () => {
       power,
       createdAt: serverTimestamp(),
     });
-    // リアルタイム未接続時は、飛翔終了後にローカルへ反映（重複表示を避ける）
+    // リアルタイム未接続時はローカルに即時反映（到着までクラスタからは除外される）
     if (!isRealtimeConnected.value) {
-      setTimeout(() => {
-        votes.value[idx].push(power);
-        nextTick().then(syncPhysicsWithVotes);
-      }, 620);
+      votes.value[idx].push(power);
+      nextTick().then(syncPhysicsWithVotes);
     }
   nextTick().then(syncPhysicsWithVotes);
     // 一人一票（ローカルに記録）※開発時は無効
@@ -243,29 +244,71 @@ async function ensureFirestoreLite() {
 // リアルタイム購読はユーザー操作で開始（初期読み込みを軽く）
 let unsubscribe = null;
 const isRealtimeConnected = ref(false);
+const isPollingFallback = ref(false);
+const connectingRealtime = ref(false);
+const realtimeError = ref('');
+let pollTimer = 0;
 async function connectRealtime() {
-  await ensureFirestoreLite();
-  if (firestoreMode !== 'full') {
-    const mod = await import('firebase/firestore');
-    ({ collection, addDoc, serverTimestamp, onSnapshot, query, orderBy, getDocs, deleteDoc, doc, getFirestore } = mod);
-    db = getFirestore(firebaseApp.value);
-    votesColRef = collection(db, 'polls', pollId, 'votes');
-    firestoreMode = 'full';
-  }
   if (unsubscribe) return; // すでに接続済み
-  const q = query(votesColRef, orderBy('createdAt', 'asc'));
+  connectingRealtime.value = true;
+  realtimeError.value = '';
+  try {
+    await ensureFirestoreLite();
+    if (firestoreMode !== 'full') {
+      const mod = await import('firebase/firestore');
+      ({ collection, addDoc, serverTimestamp, onSnapshot, query, orderBy, getDocs, deleteDoc, doc, getFirestore } = mod);
+      db = getFirestore(firebaseApp.value);
+      votesColRef = collection(db, 'polls', pollId, 'votes');
+      firestoreMode = 'full';
+    }
+    const q = query(votesColRef, orderBy('createdAt', 'asc'));
   unsubscribe = onSnapshot(q, (snap) => {
-    const arrs = options.value.map(() => []);
-    snap.forEach((d) => {
-      const data = d.data();
-      if (typeof data.optionIndex === 'number' && typeof data.power === 'number' && arrs[data.optionIndex]) {
-        arrs[data.optionIndex].push(data.power);
-      }
+      const arrs = options.value.map(() => []);
+      snap.forEach((d) => {
+        const data = d.data();
+        if (typeof data.optionIndex === 'number' && typeof data.power === 'number' && arrs[data.optionIndex]) {
+          arrs[data.optionIndex].push(data.power);
+        }
+      });
+      votes.value = arrs;
+      nextTick().then(syncPhysicsWithVotes);
+    }, (err) => {
+      // スナップショットのエラー時はポーリングにフォールバック
+      realtimeError.value = 'リアルタイム接続に失敗: ' + (err?.message || err);
+      if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+      startPollingFallback();
     });
-    votes.value = arrs;
-    nextTick().then(syncPhysicsWithVotes);
-  });
-  isRealtimeConnected.value = true;
+    isRealtimeConnected.value = true;
+  // 成功したらフォールバックを停止
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = 0; }
+  isPollingFallback.value = false;
+  } catch (e) {
+    realtimeError.value = '接続初期化でエラー: ' + (e?.message || e);
+    startPollingFallback();
+  } finally {
+    connectingRealtime.value = false;
+  }
+}
+
+function startPollingFallback() {
+  isPollingFallback.value = true;
+  // 2秒ごとに最新票を取得
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    try {
+      await ensureFirestoreLite();
+      const snap = await getDocs(votesColRef);
+      const arrs = options.value.map(() => []);
+      snap.forEach((d) => {
+        const data = d.data();
+        if (typeof data.optionIndex === 'number' && typeof data.power === 'number' && arrs[data.optionIndex]) {
+          arrs[data.optionIndex].push(data.power);
+        }
+      });
+      votes.value = arrs;
+      nextTick().then(syncPhysicsWithVotes);
+    } catch (_) { /* noop */ }
+  }, 2000);
 }
 
 // 起動時はローカル状態のみ（Firebaseは未接続）
@@ -278,6 +321,7 @@ onMounted(() => {
 onUnmounted(() => {
   if (unsubscribe) unsubscribe();
   if (rafId) cancelAnimationFrame(rafId);
+  if (pollTimer) clearInterval(pollTimer);
 });
 
 // コメント機能
@@ -334,8 +378,11 @@ const applyOptionsAndReset = async () => {
   <div class="vote-area" ref="containerRef">
     <h2>力をためて投票ツール（Mentimeter風・リアルタイム）</h2>
     <div class="realtime-toggle">
-      <button v-if="!isRealtimeConnected" @click="connectRealtime">リアルタイム受信を開始</button>
-      <span v-else class="connected">リアルタイム受信中</span>
+  <button v-if="!isRealtimeConnected && !connectingRealtime" @click="connectRealtime">リアルタイム受信を開始</button>
+  <span v-if="connectingRealtime" class="connecting">接続中...</span>
+  <span v-else-if="isRealtimeConnected" class="connected">リアルタイム受信中</span>
+  <span v-if="realtimeError" class="rt-error">{{ realtimeError }}</span>
+  <span v-if="isPollingFallback" class="fallback">（フォールバック更新中）</span>
     </div>
     <div class="options">
   <label v-for="(opt, idx) in options" :key="opt + '-' + idx">
@@ -521,6 +568,9 @@ button:disabled {
 .resetting { color: #004d40; }
 .realtime-toggle { margin-bottom: 0.5rem; }
 .connected { color: #00695c; font-weight: bold; }
+.connecting { color: #00695c; }
+.rt-error { color: #b71c1c; margin-left: 0.5rem; }
+.fallback { color: #455a64; margin-left: 0.5rem; font-size: 0.9rem; }
 
 /* 飛翔ボールのオーバーレイ */
 .flying-layer {
