@@ -14,6 +14,9 @@ const votes = ref(options.value.map(() => []));
 // 投票を保存する先（pollIdで投票ルームを分けられる）
 const pollId = 'default';
 let votesColRef;
+// テーマ（同じルーム内で複数トピックを切り替え）
+const currentTheme = ref('main');
+const newThemeName = ref('main');
 
 // 開発用: 一人一票の制限を外す（true なら複数投票可）
 const allowMultiVote = true;
@@ -69,6 +72,21 @@ const defaultPalette = ['#ef5350','#42a5f5','#66bb6a','#ffb300','#ab47bc','#26a6
 const optionColors = ref(options.value.map((_, i) => defaultPalette[i % defaultPalette.length]));
 // ユーザーが指定できるボール色（デフォルト）
 const ballColor = ref('#26a69a');
+
+// 背景色に対して読みやすい文字色（黒/白）を返す
+function contrastTextColor(hex) {
+  try {
+    const h = (hex || '').replace('#', '');
+    const r = parseInt(h.substring(0, 2), 16);
+    const g = parseInt(h.substring(2, 4), 16);
+    const b = parseInt(h.substring(4, 6), 16);
+    // 相対輝度の近似（単純な明度判定）
+    const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    return luminance > 140 ? '#000' : '#fff';
+  } catch (_) {
+    return '#fff';
+  }
+}
 
 function ensurePhysicsShape() {
   // options 変更時の形合わせ
@@ -295,11 +313,17 @@ async function ensureFirestoreLite() {
   }
   if (firestoreMode === 'none') {
     const mod = await import('firebase/firestore/lite');
-  ({ collection, addDoc, serverTimestamp, getDocs, deleteDoc, doc, getFirestore, setDoc, getDoc } = mod);
+    ({ collection, addDoc, serverTimestamp, getDocs, deleteDoc, doc, getFirestore, setDoc, getDoc } = mod);
     db = getFirestore(firebaseApp.value);
-    votesColRef = collection(db, 'polls', pollId, 'votes');
+    updateVotesRef();
     firestoreMode = 'lite';
   }
+}
+
+function updateVotesRef() {
+  if (!db) return;
+  // polls/{pollId}/themes/{theme}/votes
+  votesColRef = collection(db, 'polls', pollId, 'themes', currentTheme.value, 'votes');
 }
 
 // リアルタイム購読はユーザー操作で開始（初期読み込みを軽く）
@@ -330,9 +354,11 @@ async function connectRealtime() {
     }
     if (firestoreMode !== 'full') {
       const mod = await import('firebase/firestore');
-  ({ collection, addDoc, serverTimestamp, onSnapshot, query, orderBy, getDocs, deleteDoc, doc, getFirestore, setDoc, getDoc } = mod);
+  ({ collection, addDoc, serverTimestamp, onSnapshot, query, orderBy, getDocs, deleteDoc, doc, getFirestore, setDoc, getDoc, enableMultiTabIndexedDbPersistence } = mod);
       db = getFirestore(firebaseApp.value);
-      votesColRef = collection(db, 'polls', pollId, 'votes');
+      // 複数タブでの同時接続を許可（失敗しても継続）
+      try { await enableMultiTabIndexedDbPersistence(db); } catch (_) { /* noop */ }
+  updateVotesRef();
       firestoreMode = 'full';
     }
     const q = query(votesColRef, orderBy('createdAt', 'asc'));
@@ -392,6 +418,8 @@ onMounted(() => {
   try {
     const saved = localStorage.getItem('kaede_ball_color');
     if (saved) ballColor.value = saved;
+  const savedTheme = localStorage.getItem('kaede_current_theme');
+  if (savedTheme) { currentTheme.value = savedTheme; newThemeName.value = savedTheme; }
   } catch (_) {}
   // 物理ループ開始
   rafId = requestAnimationFrame(stepPhysics);
@@ -414,6 +442,27 @@ watch(spotRefs, () => nextTick().then(updateCenters), { deep: true });
 // ボール色の保存
 watch(ballColor, (c) => {
   try { localStorage.setItem('kaede_ball_color', c); } catch (_) {}
+});
+// テーマ変更時の処理
+watch(currentTheme, async (t, prev) => {
+  try { localStorage.setItem('kaede_current_theme', t || 'main'); } catch (_) {}
+  await ensureFirestoreLite();
+  updateVotesRef();
+  // 状態クリア
+  votes.value = options.value.map(() => []);
+  physicsBalls.value = options.value.map(() => []);
+  pendingSpawns.value = options.value.map(() => []);
+  centers.value = options.value.map(() => ({ x: 0, y: 0 }));
+  // リアルタイムを張り直し
+  const wasRealtime = isRealtimeConnected.value;
+  if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+  isRealtimeConnected.value = false;
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = 0; }
+  isPollingFallback.value = false;
+  // 設定読み込み
+  await loadOptionsConfig();
+  // 必要なら再接続
+  if (wasRealtime) connectRealtime();
 });
 
 // コメント機能
@@ -467,7 +516,7 @@ const applyOptionsAndReset = async () => {
   physicsBalls.value = options.value.map(() => []);
   pendingSpawns.value = options.value.map(() => []);
   centers.value = options.value.map(() => ({ x: 0, y: 0 }));
-  // Firestoreへオプションと色を保存
+  // Firestoreへオプションと色を保存し、票はリセット
   await saveOptionsConfig();
   await resetVotes();
 };
@@ -486,7 +535,7 @@ async function saveOptionsConfig() {
   try {
     savingOptions.value = true;
     await ensureFirestoreLite();
-    const cfgRef = doc(db, 'polls', pollId);
+    const cfgRef = doc(db, 'polls', pollId, 'themes', currentTheme.value);
     await setDoc(cfgRef, {
       options: options.value,
       optionColors: optionColors.value,
@@ -500,7 +549,7 @@ async function saveOptionsConfig() {
 async function loadOptionsConfig() {
   try {
     await ensureFirestoreLite();
-    const cfgRef = doc(db, 'polls', pollId);
+    const cfgRef = doc(db, 'polls', pollId, 'themes', currentTheme.value);
     const snap = await getDoc(cfgRef);
     if (snap.exists()) {
       const data = snap.data() || {};
@@ -625,8 +674,15 @@ function computeSpawnForVote(idx, power) {
   <span v-if="realtimeError" class="rt-error">{{ realtimeError }}</span>
   <span v-if="isPollingFallback" class="fallback">（フォールバック更新中）</span>
     </div>
+    <!-- テーマ切り替え -->
+    <div class="theme-switcher">
+      <span>テーマ: </span>
+      <strong>{{ currentTheme }}</strong>
+      <input type="text" v-model="newThemeName" placeholder="テーマ名" />
+      <button @click="currentTheme = (newThemeName || 'main').trim()">切り替え</button>
+    </div>
     <div class="options">
-  <label v-for="(opt, idx) in options" :key="opt + '-' + idx">
+      <label v-for="(opt, idx) in options" :key="opt + '-' + idx">
         <button
           :disabled="!allowMultiVote && hasVoted"
           @mousedown="startCharge(idx, $event)"
@@ -636,6 +692,10 @@ function computeSpawnForVote(idx, power) {
           @touchend.prevent="endCharge"
           @mousemove="onPointerMove"
           @touchmove.prevent="onPointerMove($event.touches?.[0] || $event)"
+          :style="{
+            background: (!allowMultiVote && hasVoted) ? '#bdbdbd' : (optionColors[idx] || '#009688'),
+            color: (!allowMultiVote && hasVoted) ? '#fff' : contrastTextColor(optionColors[idx] || '#009688')
+          }"
         >
           {{ opt }}に力をためて投票！
         </button>
@@ -648,11 +708,11 @@ function computeSpawnForVote(idx, power) {
       <div class="charge-visual">
         <div class="charge-effect" :style="{ width: (chargeValue/chargeMax*100)+'%', background: '#009688' }"></div>
       </div>
-    <!-- ボール色の設定 -->
+    </div>
+    <!-- ボール色の設定（常時表示） -->
     <div class="color-picker">
       <label>ボールの色: <input type="color" v-model="ballColor" /></label>
       <span class="hex">{{ ballColor }}</span>
-    </div>
     </div>
     <hr />
     <div class="ball-results">
@@ -828,6 +888,7 @@ button:disabled {
 .small-note { font-size: 0.85rem; color: #004d40; margin: 0 0 0.5rem; }
 .resetting { color: #004d40; }
 .realtime-toggle { margin-bottom: 0.5rem; }
+.theme-switcher { margin: 0.5rem 0 0.75rem; display: flex; gap: 0.5rem; align-items: center; }
 .color-picker { margin: 0.5rem 0 1rem; display: flex; align-items: center; gap: 0.5rem; }
 .color-picker .hex { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 0.9rem; color: #263238; }
 .connected { color: #00695c; font-weight: bold; }
