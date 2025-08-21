@@ -1,22 +1,25 @@
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue';
+import { ref, onMounted, onUnmounted, watch } from 'vue';
+
+// Firestore（動的読み込みで起動を軽量化）
 let db;
-let collection, addDoc, serverTimestamp, onSnapshot, query, orderBy;
+let collection, addDoc, serverTimestamp, onSnapshot, query, orderBy, getDocs, deleteDoc, doc;
 
-// 選択肢
-const options = ['A案', 'B案', 'C案'];
-// 各選択肢ごとの投票（力）配列。例: [[力1, 力2], [力1], [力1, 力2, 力3]]
-const votes = ref(options.map(() => []));
+// 選択肢（編集可能）
+const options = ref(['A案', 'B案', 'C案']);
+const votes = ref(options.value.map(() => []));
 
-// 投票を保存する先（pollIdで投票ルームを分けられる）
-const pollId = 'default';
+// Poll（ルーム）ID（切り替え可能）
+const pollId = ref('default');
 let votesColRef;
+let unsubscribe = null;
 
-// 開発用: 一人一票の制限を外す（true なら複数投票可）
+// 開発用: 一人一票の制限を外す
 const allowMultiVote = true;
 
 // 投票済みフラグ（一人一票時に使用）
 const hasVoted = ref(false);
+const votedKey = () => `kaede_vote_voted_${pollId.value}`;
 
 // 力をためる処理
 const charging = ref(false);
@@ -25,7 +28,7 @@ const chargeStart = ref(0);
 const chargeMax = 3000; // 最大3000ms（3秒）
 const selectedIdx = ref(null);
 
-// 投票ボタン長押し開始
+// 長押し開始
 const startCharge = (idx) => {
   if (!allowMultiVote && hasVoted.value) return;
   charging.value = true;
@@ -47,7 +50,7 @@ function chargeTick() {
   }
 }
 
-// 投票ボタン離す（サーバーに送信）
+// 離して投票（Firestoreへ保存）
 const endCharge = async () => {
   if (!charging.value || selectedIdx.value === null) return;
   charging.value = false;
@@ -64,9 +67,8 @@ const endCharge = async () => {
         createdAt: serverTimestamp(),
       });
     }
-    // 一人一票（ローカルに記録）※開発時は無効
     if (!allowMultiVote) {
-      localStorage.setItem(`kaede_vote_voted_${pollId}`, '1');
+      localStorage.setItem(votedKey(), '1');
       hasVoted.value = true;
     }
   } catch (e) {
@@ -77,52 +79,122 @@ const endCharge = async () => {
   }
 };
 
-// 起動時にリアルタイム購読を開始し、ローカルに反映
-let unsubscribe = null;
-onMounted(async () => {
-  // 投票済み状態を復元（複数投票可のときは常にfalse）
-  hasVoted.value = !allowMultiVote && localStorage.getItem(`kaede_vote_voted_${pollId}`) === '1';
-
-  // Firebaseの動的import
-  const mod = await import('firebase/firestore');
-  ({ collection, addDoc, serverTimestamp, onSnapshot, query, orderBy } = mod);
-  const firebaseMod = await import('../firebase');
-  db = firebaseMod.db;
-  votesColRef = collection(db, 'polls', pollId, 'votes');
-
+// Firestore購読の開始・再開始
+async function startSubscription() {
+  if (!db || !collection) return;
+  if (unsubscribe) {
+    unsubscribe();
+    unsubscribe = null;
+  }
+  votesColRef = collection(db, 'polls', pollId.value, 'votes');
   const q = query(votesColRef, orderBy('createdAt', 'asc'));
   unsubscribe = onSnapshot(q, (snap) => {
-    const arrs = options.map(() => []);
-    snap.forEach((doc) => {
-      const d = doc.data();
-      if (typeof d.optionIndex === 'number' && typeof d.power === 'number' && arrs[d.optionIndex]) {
-        arrs[d.optionIndex].push(d.power);
+    const arrs = options.value.map(() => []);
+    snap.forEach((d) => {
+      const data = d.data();
+      if (
+        typeof data.optionIndex === 'number' &&
+        typeof data.power === 'number' &&
+        arrs[data.optionIndex]
+      ) {
+        arrs[data.optionIndex].push(data.power);
       }
     });
     votes.value = arrs;
   });
+}
+
+// 起動時
+onMounted(async () => {
+  hasVoted.value = !allowMultiVote && localStorage.getItem(votedKey()) === '1';
+  const mod = await import('firebase/firestore');
+  ({ collection, addDoc, serverTimestamp, onSnapshot, query, orderBy, getDocs, deleteDoc, doc } = mod);
+  const firebaseMod = await import('../firebase');
+  db = firebaseMod.db;
+
+  await startSubscription();
 });
 
+// 切り替え時のクリーンアップ
 onUnmounted(() => {
   if (unsubscribe) unsubscribe();
 });
 
-// コメント機能
-const userMsg = ref('');
-const userMsgs = ref([]);
-const addUserMessage = () => {
-  if (userMsg.value) {
-    const date = new Date();
-    const nowTime = date.getHours().toString().padStart(2, '0') + ':' + date.getMinutes().toString().padStart(2, '0');
-    userMsgs.value.unshift(nowTime + ' ' + userMsg.value);
-    userMsg.value = '';
+// Poll ID切り替え
+const draftPollId = ref(pollId.value);
+const applyPollId = async () => {
+  if (!draftPollId.value) return;
+  pollId.value = draftPollId.value.trim();
+  votes.value = options.value.map(() => []);
+  hasVoted.value = !allowMultiVote && localStorage.getItem(votedKey()) === '1';
+  await startSubscription();
+};
+
+// 投票の全リセット（Firestoreの該当Pollのvotesを全削除）
+const resetting = ref(false);
+const resetVotes = async () => {
+  if (!votesColRef || !getDocs || !deleteDoc || !doc) return;
+  resetting.value = true;
+  try {
+    const snap = await getDocs(votesColRef);
+    // 注意: 件数が多い場合はバッチ化推奨
+    const tasks = [];
+    snap.forEach((d) => {
+      tasks.push(deleteDoc(doc(votesColRef, d.id)));
+    });
+    await Promise.all(tasks);
+    votes.value = options.value.map(() => []);
+    if (!allowMultiVote) {
+      localStorage.removeItem(votedKey());
+      hasVoted.value = false;
+    }
+  } catch (e) {
+    console.error('リセットに失敗しました', e);
+  } finally {
+    resetting.value = false;
   }
 };
+
+// 選択肢の編集（複数行テキスト→適用で投票リセット）
+const editableOptionsText = ref(options.value.join('\n'));
+const applyOptionsAndReset = async () => {
+  const lines = editableOptionsText.value
+    .split('\n')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  if (lines.length === 0) return;
+  options.value = lines;
+  votes.value = options.value.map(() => []);
+  await resetVotes();
+};
+
 </script>
 
 <template>
   <div class="vote-area">
     <h2>力をためて投票ツール（Mentimeter風・リアルタイム）</h2>
+
+    <!-- 管理パネル -->
+    <div class="admin-panel">
+      <h3>設定</h3>
+      <div class="row">
+        <label class="label">Poll ID:</label>
+        <input v-model="draftPollId" placeholder="poll ID を入力 (例: default, room-1)" />
+        <button @click="applyPollId">適用</button>
+      </div>
+      <div class="row">
+        <label class="label">選択肢（1行1項目）:</label>
+        <textarea v-model="editableOptionsText" rows="4" />
+      </div>
+      <div class="row gap">
+        <button @click="applyOptionsAndReset">選択肢を適用（投票リセット）</button>
+        <button :disabled="resetting" @click="resetVotes">
+          {{ resetting ? 'リセット中...' : '投票だけリセット' }}
+        </button>
+        <span class="dev-badge">開発用: 複数投票可</span>
+      </div>
+    </div>
+
     <div class="options">
       <label v-for="(opt, idx) in options" :key="opt">
         <button
@@ -136,15 +208,18 @@ const addUserMessage = () => {
           {{ opt }}に力をためて投票！
         </button>
         <span v-if="!allowMultiVote && hasVoted">（投票済み）</span>
-        <span v-else class="dev-badge">開発用: 複数投票可</span>
       </label>
     </div>
+
     <div v-if="charging" class="charge-bar">
-      <div class="charge-label">力をためています... {{ Math.round(chargeValue / 1000 * 100) / 100 }}秒</div>
+      <div class="charge-label">
+        力をためています... {{ Math.round((chargeValue / 1000) * 100) / 100 }}秒
+      </div>
       <div class="charge-visual">
         <div class="charge-effect" :style="{ width: (chargeValue/chargeMax*100)+'%', background: '#009688' }"></div>
       </div>
     </div>
+
     <hr />
     <div class="ball-results">
       <h3>投票結果</h3>
@@ -168,6 +243,7 @@ const addUserMessage = () => {
         </div>
       </div>
     </div>
+
     <hr />
     <div class="comment-area">
       <h3>コメント投稿</h3>
@@ -180,18 +256,62 @@ const addUserMessage = () => {
   </div>
 </template>
 
+<script setup>
+// ...existing code...
+// コメント機能（ローカルのみの簡易版）
+const userMsg = ref('');
+const userMsgs = ref([]);
+const addUserMessage = () => {
+  if (userMsg.value) {
+    const d = new Date();
+    const t = d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
+    userMsgs.value.unshift(t + ' ' + userMsg.value);
+    userMsg.value = '';
+  }
+};
+// ...existing code...
+</script>
+
 <style scoped>
 .vote-area {
   padding: 2rem;
   border-radius: 10px;
   background: #e0f7fa;
-  max-width: 800px;
+  max-width: 900px;
   margin: auto;
+}
+.admin-panel {
+  background: #fafafa;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+.admin-panel .row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.5rem 0;
+}
+.admin-panel .row.gap {
+  gap: 1rem;
+}
+.admin-panel .label {
+  min-width: 110px;
+  font-weight: 600;
+}
+.admin-panel input, .admin-panel textarea {
+  flex: 1;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  font-size: 0.95rem;
 }
 .options {
   display: flex;
   gap: 1rem;
   margin-bottom: 1rem;
+  flex-wrap: wrap;
 }
 button {
   padding: 0.5em 1em;
@@ -208,8 +328,7 @@ button:disabled {
   cursor: not-allowed;
 }
 .dev-badge {
-  margin-left: 0.5rem;
-  font-size: 0.8rem;
+  font-size: 0.85rem;
   color: #00695c;
 }
 .charge-bar {
@@ -237,6 +356,7 @@ button:disabled {
   display: flex;
   gap: 2rem;
   justify-content: center;
+  flex-wrap: wrap;
 }
 .ball-col {
   text-align: center;
@@ -254,7 +374,7 @@ button:disabled {
 }
 .user-msgs {
   margin-top: 0.5rem;
-  background: #fff;
+  background: #84d;
   border-radius: 5px;
   padding: 0.5rem;
   min-height: 2rem;
