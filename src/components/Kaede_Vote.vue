@@ -12,7 +12,10 @@ const votes = ref(options.map(() => []));
 const pollId = 'default';
 let votesColRef;
 
-// 投票済みフラグ（一人一票）
+// 開発用: 一人一票の制限を外す（true なら複数投票可）
+const allowMultiVote = true;
+
+// 投票済みフラグ（一人一票時に使用）
 const hasVoted = ref(false);
 
 // 力をためる処理
@@ -24,7 +27,7 @@ const selectedIdx = ref(null);
 
 // 投票ボタン長押し開始
 const startCharge = (idx) => {
-  if (hasVoted.value) return;
+  if (!allowMultiVote && hasVoted.value) return;
   charging.value = true;
   chargeValue.value = 0;
   chargeStart.value = Date.now();
@@ -46,24 +49,26 @@ function chargeTick() {
 
 // 投票ボタン離す（サーバーに送信）
 const endCharge = async () => {
-  if (!charging.value || hasVoted.value || selectedIdx.value === null) return;
+  if (!charging.value || selectedIdx.value === null) return;
   charging.value = false;
   const power = chargeValue.value;
   const idx = selectedIdx.value;
   try {
     if (!votesColRef) {
-      // 初期化前ならローカルに積むだけで終了
+      // 初期化前はローカルに積む
       votes.value[idx].push(power);
-      return;
+    } else {
+      await addDoc(votesColRef, {
+        optionIndex: idx,
+        power,
+        createdAt: serverTimestamp(),
+      });
     }
-    await addDoc(votesColRef, {
-      optionIndex: idx,
-      power,
-      createdAt: serverTimestamp(),
-    });
-    // 一人一票（ローカルに記録）
-    localStorage.setItem(`kaede_vote_voted_${pollId}`, '1');
-    hasVoted.value = true;
+    // 一人一票（ローカルに記録）※開発時は無効
+    if (!allowMultiVote) {
+      localStorage.setItem(`kaede_vote_voted_${pollId}`, '1');
+      hasVoted.value = true;
+    }
   } catch (e) {
     console.error('投票の送信に失敗しました', e);
   } finally {
@@ -75,8 +80,8 @@ const endCharge = async () => {
 // 起動時にリアルタイム購読を開始し、ローカルに反映
 let unsubscribe = null;
 onMounted(async () => {
-  // 投票済み状態を復元
-  hasVoted.value = localStorage.getItem(`kaede_vote_voted_${pollId}`) === '1';
+  // 投票済み状態を復元（複数投票可のときは常にfalse）
+  hasVoted.value = !allowMultiVote && localStorage.getItem(`kaede_vote_voted_${pollId}`) === '1';
 
   // Firebaseの動的import
   const mod = await import('firebase/firestore');
@@ -84,6 +89,7 @@ onMounted(async () => {
   const firebaseMod = await import('../firebase');
   db = firebaseMod.db;
   votesColRef = collection(db, 'polls', pollId, 'votes');
+
   const q = query(votesColRef, orderBy('createdAt', 'asc'));
   unsubscribe = onSnapshot(q, (snap) => {
     const arrs = options.map(() => []);
@@ -120,7 +126,7 @@ const addUserMessage = () => {
     <div class="options">
       <label v-for="(opt, idx) in options" :key="opt">
         <button
-          :disabled="hasVoted"
+          :disabled="!allowMultiVote && hasVoted"
           @mousedown="startCharge(idx)"
           @touchstart.prevent="startCharge(idx)"
           @mouseup="endCharge"
@@ -129,7 +135,8 @@ const addUserMessage = () => {
         >
           {{ opt }}に力をためて投票！
         </button>
-        <span v-if="hasVoted">（投票済み）</span>
+        <span v-if="!allowMultiVote && hasVoted">（投票済み）</span>
+        <span v-else class="dev-badge">開発用: 複数投票可</span>
       </label>
     </div>
     <div v-if="charging" class="charge-bar">
@@ -199,6 +206,11 @@ button {
 button:disabled {
   background: #bdbdbd;
   cursor: not-allowed;
+}
+.dev-badge {
+  margin-left: 0.5rem;
+  font-size: 0.8rem;
+  color: #00695c;
 }
 .charge-bar {
   margin: 1rem 0;
