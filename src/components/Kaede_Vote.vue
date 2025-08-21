@@ -2,7 +2,7 @@
 import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue';
 let db;
 // Firestoreは動的読み込み。まずは lite API（書き込み/読み出し）だけ読み込む。
-let collection, addDoc, serverTimestamp, onSnapshot, query, orderBy, getDocs, deleteDoc, doc, getFirestore;
+let collection, addDoc, serverTimestamp, onSnapshot, query, orderBy, getDocs, deleteDoc, doc, getFirestore, setDoc, getDoc;
 const firebaseApp = ref(null);
 let firestoreMode = 'none'; // 'none' | 'lite' | 'full'
 
@@ -39,6 +39,7 @@ const lastClient = ref({ x: 0, y: 0 });
 const particles = ref([]); // {id,x,y,vx,vy,life,size}
 let particleAcc = 0;
 let lastTimeMs = performance.now();
+const chargeSpawn = ref({ x: 0, y: 0 }); // ステージ基準のプレビュー位置
 
 function flightDuration(power) {
   const t = Math.max(0, Math.min(1, power / chargeMax));
@@ -64,7 +65,10 @@ function calcRadius(power) {
 const physicsBalls = ref(options.value.map(() => []));
 const pendingSpawns = ref(options.value.map(() => [])); // 票追加時の初期位置バッファ [{x,y}]
 const centers = ref(options.value.map(() => ({ x: 0, y: 0 })));
-const spotColors = ['#ef5350','#42a5f5','#66bb6a','#ffb300','#ab47bc','#26a69a','#8d6e63','#26c6da'];
+const defaultPalette = ['#ef5350','#42a5f5','#66bb6a','#ffb300','#ab47bc','#26a69a','#8d6e63','#26c6da'];
+const optionColors = ref(options.value.map((_, i) => defaultPalette[i % defaultPalette.length]));
+// ユーザーが指定できるボール色（デフォルト）
+const ballColor = ref('#26a69a');
 
 function ensurePhysicsShape() {
   // options 変更時の形合わせ
@@ -208,6 +212,8 @@ const startCharge = (idx, evt) => {
       lastPointerOverlay.value = { x: ex - cont.left, y: ey - cont.top };
     }
   } catch (_) {}
+  // 初回のプレビュー位置も更新
+  updateChargePreview();
   chargeTick();
 };
 
@@ -221,6 +227,7 @@ function onPointerMove(evt) {
   lastClient.value = { x: ex, y: ey };
   if (c) lastPointerOverlay.value = { x: ex - c.left, y: ey - c.top };
   } catch (_) {}
+  updateChargePreview();
 }
 
 // 力をためるループ
@@ -230,6 +237,7 @@ function chargeTick() {
   let val = now - chargeStart.value;
   if (val > chargeMax) val = chargeMax;
   chargeValue.value = val;
+  updateChargePreview();
   if (val < chargeMax) {
     requestAnimationFrame(chargeTick);
   }
@@ -253,11 +261,8 @@ const endCharge = async () => {
     // 票に対応するボールの初期位置（stage基準）と初速を算出
     const spawn = computeSpawnForVote(idx, power);
     if (spawn) pendingSpawns.value[idx].push(spawn);
-    // リアルタイム未接続時は即ローカル票に追加（同時に物体が生成され動き出す）
-    if (!isRealtimeConnected.value) {
-      votes.value[idx].push(power);
-      nextTick().then(syncPhysicsWithVotes);
-    }
+  // リアルタイム接続の有無に関係なく、即ローカル票に追加して視覚的連続性を確保
+  votes.value[idx].push(power);
   nextTick().then(syncPhysicsWithVotes);
     // 一人一票（ローカルに記録）※開発時は無効
     if (!allowMultiVote) {
@@ -290,7 +295,7 @@ async function ensureFirestoreLite() {
   }
   if (firestoreMode === 'none') {
     const mod = await import('firebase/firestore/lite');
-    ({ collection, addDoc, serverTimestamp, getDocs, deleteDoc, doc, getFirestore } = mod);
+  ({ collection, addDoc, serverTimestamp, getDocs, deleteDoc, doc, getFirestore, setDoc, getDoc } = mod);
     db = getFirestore(firebaseApp.value);
     votesColRef = collection(db, 'polls', pollId, 'votes');
     firestoreMode = 'lite';
@@ -325,7 +330,7 @@ async function connectRealtime() {
     }
     if (firestoreMode !== 'full') {
       const mod = await import('firebase/firestore');
-      ({ collection, addDoc, serverTimestamp, onSnapshot, query, orderBy, getDocs, deleteDoc, doc, getFirestore } = mod);
+  ({ collection, addDoc, serverTimestamp, onSnapshot, query, orderBy, getDocs, deleteDoc, doc, getFirestore, setDoc, getDoc } = mod);
       db = getFirestore(firebaseApp.value);
       votesColRef = collection(db, 'polls', pollId, 'votes');
       firestoreMode = 'full';
@@ -383,6 +388,11 @@ function startPollingFallback() {
 // 起動時はローカル状態のみ（Firebaseは未接続）
 onMounted(() => {
   hasVoted.value = !allowMultiVote && localStorage.getItem(`kaede_vote_voted_${pollId}`) === '1';
+  // ボール色の復元
+  try {
+    const saved = localStorage.getItem('kaede_ball_color');
+    if (saved) ballColor.value = saved;
+  } catch (_) {}
   // 物理ループ開始
   rafId = requestAnimationFrame(stepPhysics);
   // 初回のセンター計測
@@ -401,6 +411,10 @@ onUnmounted(() => {
 watch(options, () => nextTick().then(updateCenters));
 watch(stageRef, () => nextTick().then(updateCenters));
 watch(spotRefs, () => nextTick().then(updateCenters), { deep: true });
+// ボール色の保存
+watch(ballColor, (c) => {
+  try { localStorage.setItem('kaede_ball_color', c); } catch (_) {}
+});
 
 // コメント機能
 const userMsg = ref('');
@@ -417,6 +431,7 @@ const addUserMessage = () => {
 // 管理: 選択肢編集と投票リセット
 const editableOptionsText = ref(options.value.join('\n'));
 const resetting = ref(false);
+const savingOptions = ref(false);
 
 const resetVotes = async () => {
   await ensureFirestoreLite();
@@ -446,12 +461,74 @@ const applyOptionsAndReset = async () => {
     .filter((s) => s.length > 0);
   if (lines.length === 0) return;
   options.value = lines;
+  // optionColors の長さを合わせる
+  optionColors.value = fillColorsToLength(optionColors.value, options.value.length);
   votes.value = options.value.map(() => []);
   physicsBalls.value = options.value.map(() => []);
   pendingSpawns.value = options.value.map(() => []);
   centers.value = options.value.map(() => ({ x: 0, y: 0 }));
+  // Firestoreへオプションと色を保存
+  await saveOptionsConfig();
   await resetVotes();
 };
+
+function defaultColor(i) {
+  return defaultPalette[i % defaultPalette.length];
+}
+
+function fillColorsToLength(colors, len) {
+  const out = new Array(len);
+  for (let i = 0; i < len; i++) out[i] = colors?.[i] || defaultColor(i);
+  return out;
+}
+
+async function saveOptionsConfig() {
+  try {
+    savingOptions.value = true;
+    await ensureFirestoreLite();
+    const cfgRef = doc(db, 'polls', pollId);
+    await setDoc(cfgRef, {
+      options: options.value,
+      optionColors: optionColors.value,
+      updatedAt: new Date().toISOString(),
+    }, { merge: true });
+  } finally {
+    savingOptions.value = false;
+  }
+}
+
+async function loadOptionsConfig() {
+  try {
+    await ensureFirestoreLite();
+    const cfgRef = doc(db, 'polls', pollId);
+    const snap = await getDoc(cfgRef);
+    if (snap.exists()) {
+      const data = snap.data() || {};
+      if (Array.isArray(data.options) && data.options.length) {
+        options.value = data.options.map(String);
+        editableOptionsText.value = options.value.join('\n');
+      }
+      if (Array.isArray(data.optionColors)) {
+        optionColors.value = fillColorsToLength(data.optionColors, options.value.length);
+      } else {
+        optionColors.value = fillColorsToLength([], options.value.length);
+      }
+      ensurePhysicsShape();
+      nextTick().then(updateCenters);
+    } else {
+      // 初回は現在の設定を書き出す
+      optionColors.value = fillColorsToLength(optionColors.value, options.value.length);
+      await saveOptionsConfig();
+    }
+  } catch (_) {
+    // 失敗時はデフォルト長に合わせる
+    optionColors.value = fillColorsToLength(optionColors.value, options.value.length);
+  }
+}
+
+async function saveOptionColors() {
+  await saveOptionsConfig();
+}
 
 function updateCenters() {
   try {
@@ -464,10 +541,17 @@ function updateCenters() {
       const r = el.getBoundingClientRect();
       return { x: r.left - st.left + r.width / 2, y: r.top - st.top + r.height / 2 };
     });
+  if (charging.value) updateChargePreview();
   } catch (_) {}
 }
 
 function onResize() { updateCenters(); }
+
+function updateChargePreview() {
+  if (!charging.value || selectedIdx.value === null) return;
+  const spawn = computeSpawnForVote(selectedIdx.value, chargeValue.value);
+  if (spawn) chargeSpawn.value = { x: spawn.x, y: spawn.y };
+}
 
 // 押下位置（client座標）→集合点中心へ向かう線とステージ矩形の交点を初期位置にし、力に応じた初速を付与
 function computeSpawnForVote(idx, power) {
@@ -564,6 +648,11 @@ function computeSpawnForVote(idx, power) {
       <div class="charge-visual">
         <div class="charge-effect" :style="{ width: (chargeValue/chargeMax*100)+'%', background: '#009688' }"></div>
       </div>
+    <!-- ボール色の設定 -->
+    <div class="color-picker">
+      <label>ボールの色: <input type="color" v-model="ballColor" /></label>
+      <span class="hex">{{ ballColor }}</span>
+    </div>
     </div>
     <hr />
     <div class="ball-results">
@@ -571,8 +660,8 @@ function computeSpawnForVote(idx, power) {
       <!-- 集合ステージ：一枚キャンバス上に複数の集合点（スポット）を配置 -->
       <div class="cluster-stage" ref="stageRef" @mousemove="onPointerMove" @touchmove.prevent="onPointerMove($event.touches?.[0] || $event)">
         <!-- 集合スポット（各選択肢の中心） -->
-        <div v-for="(opt, idx) in options" :key="'spot-' + idx" class="spot" :ref="el => (spotRefs[idx] = el)" :style="{ borderColor: spotColors[idx % spotColors.length] }">
-          <div class="spot-center" :style="{ background: spotColors[idx % spotColors.length] }"></div>
+        <div v-for="(opt, idx) in options" :key="'spot-' + idx" class="spot" :ref="el => (spotRefs[idx] = el)" :style="{ borderColor: optionColors[idx] || defaultPalette[idx % defaultPalette.length] }">
+          <div class="spot-center" :style="{ background: optionColors[idx] || defaultPalette[idx % defaultPalette.length] }"></div>
           <div class="option-label">{{ opt }}</div>
           <div class="ball-count">{{ votes[idx].length }}票</div>
         </div>
@@ -582,22 +671,26 @@ function computeSpawnForVote(idx, power) {
             v-for="(b, bi) in physicsBalls[idx]"
             :key="bi"
             class="cluster-ball"
-            :style="{ left: b.x + 'px', top: b.y + 'px', width: (b.r*2) + 'px', height: (b.r*2) + 'px' }"
+            :style="{ left: b.x + 'px', top: b.y + 'px', width: (b.r*2) + 'px', height: (b.r*2) + 'px', backgroundColor: ballColor }"
+          ></div>
+          <!-- 押下中のプレビュー（ステージ基準の位置で表示） -->
+          <div
+            v-if="charging && selectedIdx === idx"
+            class="cluster-ball"
+            :style="{
+              left: chargeSpawn.x + 'px',
+              top: chargeSpawn.y + 'px',
+              width: (calcRadius(chargeValue) * 2) + 'px',
+              height: (calcRadius(chargeValue) * 2) + 'px',
+              opacity: 0.5,
+              backgroundColor: ballColor
+            }"
           ></div>
         </div>
       </div>
     </div>
-  <!-- オーバーレイ（チャージ表示と粒子のみ保持／vote-area基準） -->
+  <!-- オーバーレイ（粒子のみ保持／vote-area基準） -->
   <div class="flying-layer">
-      <!-- 押下中のチャージボール（プレビューで徐々に大きく） -->
-    <div v-if="charging" class="charge-ball"
-        :style="{
-      left: lastPointerOverlay.x + 'px',
-      top: lastPointerOverlay.y + 'px',
-          width: (calcRadius(chargeValue) * 2) + 'px',
-          height: (calcRadius(chargeValue) * 2) + 'px'
-        }"
-      ></div>
       <!-- 粒子 -->
       <div
         v-for="p in particles"
@@ -628,9 +721,17 @@ function computeSpawnForVote(idx, power) {
       <h3>管理用（選択肢の編集と票のリセット）</h3>
       <p class="small-note">1行につき1つの選択肢として扱います。適用時に既存の票は削除されます。</p>
       <textarea v-model="editableOptionsText" rows="6" class="opts-textarea"></textarea>
+      <div class="option-colors">
+        <div v-for="(opt, idx) in options" :key="'color-' + idx" class="opt-color-row">
+          <span class="opt-name">{{ opt }}</span>
+          <input type="color" v-model="optionColors[idx]" />
+          <span class="hex">{{ optionColors[idx] }}</span>
+        </div>
+      </div>
       <div class="admin-actions">
         <button @click="applyOptionsAndReset" :disabled="resetting">選択肢を適用してリセット</button>
         <button @click="resetVotes" :disabled="resetting">票だけリセット</button>
+        <button @click="saveOptionColors" :disabled="savingOptions">色だけ保存</button>
         <span v-if="resetting" class="resetting">処理中...</span>
       </div>
     </div>
@@ -727,6 +828,8 @@ button:disabled {
 .small-note { font-size: 0.85rem; color: #004d40; margin: 0 0 0.5rem; }
 .resetting { color: #004d40; }
 .realtime-toggle { margin-bottom: 0.5rem; }
+.color-picker { margin: 0.5rem 0 1rem; display: flex; align-items: center; gap: 0.5rem; }
+.color-picker .hex { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 0.9rem; color: #263238; }
 .connected { color: #00695c; font-weight: bold; }
 .connecting { color: #00695c; }
 .rt-error { color: #b71c1c; margin-left: 0.5rem; }
