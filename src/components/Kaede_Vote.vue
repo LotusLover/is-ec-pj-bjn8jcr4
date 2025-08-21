@@ -291,8 +291,18 @@ const endCharge = async () => {
 // Firestore/Lite を必要な時だけ読み込む（書き込み・リセット用）
 async function ensureFirestoreLite() {
   if (!firebaseApp.value) {
-    const firebaseMod = await import('../firebase');
-    firebaseApp.value = firebaseMod.app;
+    // ローカルモジュールに依存せず、ここで直接初期化
+    const { initializeApp } = await import('firebase/app');
+    const firebaseConfig = {
+      apiKey: "AIzaSyB1ZKM2j8epqauRiYnlwd9GemHw5qltyOk",
+      authDomain: "kaede-vote-back.firebaseapp.com",
+      projectId: "kaede-vote-back",
+      storageBucket: "kaede-vote-back.firebasestorage.app",
+      messagingSenderId: "612230015492",
+      appId: "1:612230015492:web:285cef7c4a267d0ecde351",
+      measurementId: "G-SY3402QMCD"
+    };
+    firebaseApp.value = initializeApp(firebaseConfig);
   }
   if (firestoreMode === 'none') {
     const mod = await import('firebase/firestore/lite');
@@ -316,6 +326,19 @@ async function connectRealtime() {
   realtimeError.value = '';
   try {
     await ensureFirestoreLite();
+    // 念のため未初期化ならここでも初期化
+    if (!firebaseApp.value) {
+      const { initializeApp } = await import('firebase/app');
+      firebaseApp.value = initializeApp({
+        apiKey: "AIzaSyB1ZKM2j8epqauRiYnlwd9GemHw5qltyOk",
+        authDomain: "kaede-vote-back.firebaseapp.com",
+        projectId: "kaede-vote-back",
+        storageBucket: "kaede-vote-back.firebasestorage.app",
+        messagingSenderId: "612230015492",
+        appId: "1:612230015492:web:285cef7c4a267d0ecde351",
+        measurementId: "G-SY3402QMCD"
+      });
+    }
     if (firestoreMode !== 'full') {
       const mod = await import('firebase/firestore');
       ({ collection, addDoc, serverTimestamp, onSnapshot, query, orderBy, getDocs, deleteDoc, doc, getFirestore } = mod);
