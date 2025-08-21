@@ -13,6 +13,10 @@ const options = ref(['A案', 'B案', 'C案']);
 // 投票を保存する先（pollIdで投票ルームを分けられる）
 const pollId = 'default';
 
+// テーマ（同じルーム内で複数トピックを切り替え）
+const currentTheme = ref('main');
+const newThemeName = ref('main');
+
 // Firestore 関連は composable に委譲
 const {
   votes,
@@ -28,10 +32,6 @@ const {
   realtimeError,
   isPollingFallback,
 } = useFirestore(pollId, currentTheme);
-
-// テーマ（同じルーム内で複数トピックを切り替え）
-const currentTheme = ref('main');
-const newThemeName = ref('main');
 
 // 開発用: 一人一票の制限を外す（true なら複数投票可）
 const allowMultiVote = true;
