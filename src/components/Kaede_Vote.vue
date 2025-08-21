@@ -63,7 +63,7 @@ function syncPhysicsWithVotes() {
     const targetCount = votes.value[idx]?.length || 0;
     const arr = physicsBalls.value[idx];
     // 飛翔中の同一option票を差し引き（重複表示回避）
-    const flyingCount = flyingBalls.value.filter(b => b.optionIndex === idx).length;
+  const flyingCount = flyingBalls.value.filter(b => b.optionIndex === idx && !b.arrived).length;
     const visibleTarget = Math.max(0, targetCount - flyingCount);
     // 追加
     while (arr.length < visibleTarget) {
@@ -192,6 +192,8 @@ const endCharge = async () => {
     // 一定時間後にオーバーレイから除去
     setTimeout(() => {
       flyingBalls.value = flyingBalls.value.filter(b => b.id !== id);
+      // 飛翔終了時に即座にクラスタを再同期（最新票を反映）
+      nextTick().then(syncPhysicsWithVotes);
     }, 700);
   } catch (_) {}
   try {
@@ -207,7 +209,7 @@ const endCharge = async () => {
       setTimeout(() => {
         votes.value[idx].push(power);
         nextTick().then(syncPhysicsWithVotes);
-      }, 700);
+      }, 620);
     }
   nextTick().then(syncPhysicsWithVotes);
     // 一人一票（ローカルに記録）※開発時は無効
@@ -421,6 +423,7 @@ const applyOptionsAndReset = async () => {
   background: #6ba000;
   max-width: 800px;
   margin: auto;
+  position: relative; /* 飛翔オーバーレイの基準にする */
 }
 .options {
   display: flex;
@@ -528,10 +531,11 @@ button:disabled {
 .flying-ball {
   position: absolute;
   border-radius: 50%;
-  background: radial-gradient(circle at 30% 30%, #b2dfdb, #009688);
+  /* 光沢をなくしフラットに */
+  background: #26a69a;
   transform: translate(-50%, -50%);
   transition: left 0.6s ease, top 0.6s ease, opacity 0.3s ease;
-  box-shadow: 0 6px 14px rgba(0,0,0,0.2);
+  box-shadow: 0 4px 10px rgba(0,0,0,0.16);
 }
 
 /* クラスタ表示 */
@@ -546,8 +550,9 @@ button:disabled {
 .cluster-ball {
   position: absolute;
   border-radius: 50%;
-  background: radial-gradient(circle at 30% 30%, #b2dfdb, #009688);
+  /* 光沢をなくしフラットに */
+  background: #26a69a;
   transform: translate(-50%, -50%);
-  box-shadow: 0 6px 12px rgba(0,0,0,0.18);
+  box-shadow: 0 4px 9px rgba(0,0,0,0.15);
 }
 </style>
