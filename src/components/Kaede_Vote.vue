@@ -30,7 +30,7 @@ const selectedIdx = ref(null);
 // アニメーション用
 const containerRef = ref(null);
 const optionRefs = ref([]); // 各選択肢の集積ボックス参照
-const flyingBalls = ref([]); // 画面上を飛ぶ一時的なボール
+const flyingBalls = ref([]); // 画面上を飛ぶ一時的なボール（{id,left,top,r,arrived,optionIndex,power}）
 const lastPointer = ref({ x: 0, y: 0 }); // コンテナ基準の発射位置
 
 // 疑似物理: 各選択肢のボール群を2Dで吸引・分離
@@ -40,6 +40,14 @@ const ATTRACT = 0.02;
 const DAMPING = 0.92;
 const REPULSE = 0.08;
 const PADDING = 2;
+// ボール半径の見た目調整（差を圧縮）
+const R_MIN = 14; // 最小半径
+const R_MAX = 34; // 最大半径（差分は 20）
+function calcRadius(power) {
+  const t = Math.max(0, Math.min(1, power / chargeMax));
+  const eased = Math.sqrt(t); // 差を圧縮（0.5乗）
+  return R_MIN + (R_MAX - R_MIN) * eased;
+}
 const physicsBalls = ref(options.value.map(() => []));
 
 function ensurePhysicsShape() {
@@ -54,11 +62,14 @@ function syncPhysicsWithVotes() {
   for (let idx = 0; idx < options.value.length; idx++) {
     const targetCount = votes.value[idx]?.length || 0;
     const arr = physicsBalls.value[idx];
+    // 飛翔中の同一option票を差し引き（重複表示回避）
+    const flyingCount = flyingBalls.value.filter(b => b.optionIndex === idx).length;
+    const visibleTarget = Math.max(0, targetCount - flyingCount);
     // 追加
-    while (arr.length < targetCount) {
+    while (arr.length < visibleTarget) {
       const i = arr.length; // 新規のインデックス
-      const power = votes.value[idx][i];
-      const r = 10 + (power / chargeMax) * 40;
+  const power = votes.value[idx][i];
+  const r = calcRadius(power);
       arr.push({
         x: BOX_W / 2 + (Math.random() - 0.5) * 10,
         y: BOX_H / 2 + (Math.random() - 0.5) * 10,
@@ -68,7 +79,7 @@ function syncPhysicsWithVotes() {
       });
     }
     // 削除
-    while (arr.length > targetCount) arr.pop();
+    while (arr.length > visibleTarget) arr.pop();
   }
 }
 
@@ -167,9 +178,9 @@ const endCharge = async () => {
       destX = r.left - c.left + BOX_W / 2;
       destY = r.top - c.top + BOX_H / 2;
     }
-    const r = 10 + power / chargeMax * 40;
-    const id = Date.now() + Math.random();
-    const ball = { id, left: lastPointer.value.x, top: lastPointer.value.y, r, arrived: false };
+  const r = calcRadius(power);
+  const id = Date.now() + Math.random();
+  const ball = { id, left: lastPointer.value.x, top: lastPointer.value.y, r, arrived: false, optionIndex: idx, power };
     flyingBalls.value.push(ball);
     await nextTick();
     // 目的地へ移動（CSSトランジション）
@@ -191,9 +202,12 @@ const endCharge = async () => {
       power,
       createdAt: serverTimestamp(),
     });
-    // リアルタイム未接続時はローカルへも反映
+    // リアルタイム未接続時は、飛翔終了後にローカルへ反映（重複表示を避ける）
     if (!isRealtimeConnected.value) {
-      votes.value[idx].push(power);
+      setTimeout(() => {
+        votes.value[idx].push(power);
+        nextTick().then(syncPhysicsWithVotes);
+      }, 700);
     }
   nextTick().then(syncPhysicsWithVotes);
     // 一人一票（ローカルに記録）※開発時は無効
