@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onUnmounted, nextTick } from 'vue';
+import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue';
 let db;
 // Firestoreは動的読み込み。まずは lite API（書き込み/読み出し）だけ読み込む。
 let collection, addDoc, serverTimestamp, onSnapshot, query, orderBy, getDocs, deleteDoc, doc, getFirestore;
@@ -28,8 +28,8 @@ const chargeStart = ref(0);
 const chargeMax = 3000; // 最大3000ms（3秒）
 const selectedIdx = ref(null);
 // アニメーション用（集合点モデル）
-const containerRef = ref(null); // 集合ステージ（cluster-stage）参照
-const stageRef = containerRef; // 後方互換のため同一参照
+const containerRef = ref(null); // 外枠（vote-area）
+const stageRef = ref(null); // 集合ステージ（cluster-stage）
 const spotRefs = ref([]); // 各選択肢の集合点参照
 const lastPointer = ref({ x: 0, y: 0 }); // ステージ基準の発射位置
 // 押下中の粒子エフェクトとプレビュー用チャージボール
@@ -46,7 +46,7 @@ function flightDuration(power) {
 // 疑似物理: 各選択肢のボール群を2Dで吸引・分離
 // ステージのサイズ（境界に使用）
 const stageSize = ref({ w: 700, h: 240 });
-const ATTRACT = 0.02;
+const ATTRACT = 0.035;
 const DAMPING = 0.92;
 const REPULSE = 0.08;
 const PADDING = 2;
@@ -61,6 +61,7 @@ function calcRadius(power) {
 const physicsBalls = ref(options.value.map(() => []));
 const pendingSpawns = ref(options.value.map(() => [])); // 票追加時の初期位置バッファ [{x,y}]
 const centers = ref(options.value.map(() => ({ x: 0, y: 0 })));
+const spotColors = ['#ef5350','#42a5f5','#66bb6a','#ffb300','#ab47bc','#26a69a','#8d6e63','#26c6da'];
 
 function ensurePhysicsShape() {
   // options 変更時の形合わせ
@@ -423,6 +424,11 @@ onUnmounted(() => {
   window.removeEventListener('resize', onResize);
 });
 
+// optionsやDOM参照が変わったら中心を再計測
+watch(options, () => nextTick().then(updateCenters));
+watch(stageRef, () => nextTick().then(updateCenters));
+watch(spotRefs, () => nextTick().then(updateCenters), { deep: true });
+
 // コメント機能
 const userMsg = ref('');
 const userMsgs = ref([]);
@@ -531,7 +537,8 @@ function onResize() { updateCenters(); }
       <!-- 集合ステージ：一枚キャンバス上に複数の集合点（スポット）を配置 -->
       <div class="cluster-stage" ref="stageRef" @mousemove="onPointerMove" @touchmove.prevent="onPointerMove($event.touches?.[0] || $event)">
         <!-- 集合スポット（各選択肢の中心） -->
-        <div v-for="(opt, idx) in options" :key="'spot-' + idx" class="spot" :ref="el => (spotRefs[idx] = el)">
+        <div v-for="(opt, idx) in options" :key="'spot-' + idx" class="spot" :ref="el => (spotRefs[idx] = el)" :style="{ borderColor: spotColors[idx % spotColors.length] }">
+          <div class="spot-center" :style="{ background: spotColors[idx % spotColors.length] }"></div>
           <div class="option-label">{{ opt }}</div>
           <div class="ball-count">{{ votes[idx].length }}票</div>
         </div>
@@ -733,6 +740,10 @@ button:disabled {
   background: #e0f2f1;
   border: 1px solid #b2dfdb;
   border-radius: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: center;
 }
 /* 集合スポット（各選択肢の中心マーカー）*/
 .spot {
@@ -744,9 +755,19 @@ button:disabled {
   width: 220px;
   height: 220px;
   margin: 8px;
-  background: #ffffff80;
-  border: 1px dashed #80cbc4;
+  background: #ffffffb3;
+  border: 2px dashed #80cbc4;
   border-radius: 12px;
+}
+.spot-center {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  opacity: 0.9;
 }
 .cluster-ball {
   position: absolute;
