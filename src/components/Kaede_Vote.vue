@@ -27,11 +27,11 @@ const chargeValue = ref(0);
 const chargeStart = ref(0);
 const chargeMax = 3000; // 最大3000ms（3秒）
 const selectedIdx = ref(null);
-// アニメーション用
-const containerRef = ref(null);
-const optionRefs = ref([]); // 各選択肢の集積ボックス参照
-const flyingBalls = ref([]); // 画面上を飛ぶ一時的なボール（{id,left,top,r,arrived,optionIndex,power}）
-const lastPointer = ref({ x: 0, y: 0 }); // コンテナ基準の発射位置
+// アニメーション用（集合点モデル）
+const containerRef = ref(null); // 集合ステージ（cluster-stage）参照
+const stageRef = containerRef; // 後方互換のため同一参照
+const spotRefs = ref([]); // 各選択肢の集合点参照
+const lastPointer = ref({ x: 0, y: 0 }); // ステージ基準の発射位置
 // 押下中の粒子エフェクトとプレビュー用チャージボール
 const particles = ref([]); // {id,x,y,vx,vy,life,size}
 let particleAcc = 0;
@@ -44,8 +44,8 @@ function flightDuration(power) {
 }
 
 // 疑似物理: 各選択肢のボール群を2Dで吸引・分離
-const BOX_W = 120;
-const BOX_H = 150;
+// ステージのサイズ（境界に使用）
+const stageSize = ref({ w: 700, h: 240 });
 const ATTRACT = 0.02;
 const DAMPING = 0.92;
 const REPULSE = 0.08;
@@ -59,11 +59,19 @@ function calcRadius(power) {
   return R_MIN + (R_MAX - R_MIN) * eased;
 }
 const physicsBalls = ref(options.value.map(() => []));
+const pendingSpawns = ref(options.value.map(() => [])); // 票追加時の初期位置バッファ [{x,y}]
+const centers = ref(options.value.map(() => ({ x: 0, y: 0 })));
 
 function ensurePhysicsShape() {
   // options 変更時の形合わせ
   if (physicsBalls.value.length !== options.value.length) {
     physicsBalls.value = options.value.map(() => []);
+  }
+  if (pendingSpawns.value.length !== options.value.length) {
+    pendingSpawns.value = options.value.map(() => []);
+  }
+  if (centers.value.length !== options.value.length) {
+    centers.value = options.value.map(() => ({ x: 0, y: 0 }));
   }
 }
 
@@ -72,21 +80,18 @@ function syncPhysicsWithVotes() {
   for (let idx = 0; idx < options.value.length; idx++) {
     const targetCount = votes.value[idx]?.length || 0;
     const arr = physicsBalls.value[idx];
-    // 飛翔中の同一option票を差し引き（重複表示回避）
-  const flyingCount = flyingBalls.value.filter(b => b.optionIndex === idx && !b.arrived).length;
-    const visibleTarget = Math.max(0, targetCount - flyingCount);
-    // 追加
+    const visibleTarget = Math.max(0, targetCount);
+    // 追加（初期位置は pendingSpawn があればそれ、なければ集合点近傍）
     while (arr.length < visibleTarget) {
       const i = arr.length; // 新規のインデックス
-  const power = votes.value[idx][i];
-  const r = calcRadius(power);
-      arr.push({
-        x: BOX_W / 2 + (Math.random() - 0.5) * 10,
-        y: BOX_H / 2 + (Math.random() - 0.5) * 10,
-        vx: 0,
-        vy: 0,
-        r,
-      });
+      const power = votes.value[idx][i];
+      const r = calcRadius(power);
+      const spawn = pendingSpawns.value[idx]?.shift() || null;
+      const cx = centers.value[idx]?.x ?? stageSize.value.w / 2;
+      const cy = centers.value[idx]?.y ?? stageSize.value.h / 2;
+      const sx = spawn?.x ?? (cx + (Math.random() - 0.5) * 12);
+      const sy = spawn?.y ?? (cy + (Math.random() - 0.5) * 12);
+      arr.push({ x: sx, y: sy, vx: 0, vy: 0, r });
     }
     // 削除
     while (arr.length > visibleTarget) arr.pop();
@@ -133,10 +138,12 @@ function stepPhysics() {
       if (p.life <= 0) particles.value.splice(i, 1);
     }
   }
+  const w = stageSize.value.w;
+  const h = stageSize.value.h;
   for (let idx = 0; idx < physicsBalls.value.length; idx++) {
     const arr = physicsBalls.value[idx];
-    const cx = BOX_W / 2;
-    const cy = BOX_H / 2;
+    const cx = centers.value[idx]?.x ?? w / 2;
+    const cy = centers.value[idx]?.y ?? h / 2;
     // 吸引
     for (let b of arr) {
       b.vx += (cx - b.x) * ATTRACT;
@@ -169,9 +176,9 @@ function stepPhysics() {
       b.y += b.vy;
       // 境界
       if (b.x < b.r) { b.x = b.r; b.vx *= -0.5; }
-      if (b.x > BOX_W - b.r) { b.x = BOX_W - b.r; b.vx *= -0.5; }
+      if (b.x > w - b.r) { b.x = w - b.r; b.vx *= -0.5; }
       if (b.y < b.r) { b.y = b.r; b.vy *= -0.5; }
-      if (b.y > BOX_H - b.r) { b.y = BOX_H - b.r; b.vy *= -0.5; }
+      if (b.y > h - b.r) { b.y = h - b.r; b.vy *= -0.5; }
     }
   }
   rafId = requestAnimationFrame(stepPhysics);
@@ -186,7 +193,7 @@ const startCharge = (idx, evt) => {
   selectedIdx.value = idx;
   // 発射開始位置（コンテナ基準）を記録
   try {
-    const c = containerRef.value?.getBoundingClientRect();
+    const c = stageRef.value?.getBoundingClientRect();
     const e = evt || window.event;
     const ex = e?.clientX ?? (e?.pageX ?? 0);
     const ey = e?.clientY ?? (e?.pageY ?? 0);
@@ -200,7 +207,7 @@ const startCharge = (idx, evt) => {
 function onPointerMove(evt) {
   if (!charging.value) return;
   try {
-    const c = containerRef.value?.getBoundingClientRect();
+  const c = stageRef.value?.getBoundingClientRect();
     const e = evt || window.event;
     const ex = e?.clientX ?? (e?.pageX ?? 0);
     const ey = e?.clientY ?? (e?.pageY ?? 0);
@@ -269,7 +276,10 @@ const endCharge = async () => {
       power,
       createdAt: serverTimestamp(),
     });
-    // リアルタイム未接続時はローカルに即時反映（到着までクラスタからは除外される）
+    // 票に対応するボールを出現（集合点モデル）
+    // まず初期位置（押下地点）を pending に積んでおく
+    pendingSpawns.value[idx].push({ x: lastPointer.value.x, y: lastPointer.value.y });
+    // リアルタイム未接続時は即ローカル票に追加（同時に物体が生成され動き出す）
     if (!isRealtimeConnected.value) {
       votes.value[idx].push(power);
       nextTick().then(syncPhysicsWithVotes);
@@ -401,12 +411,16 @@ onMounted(() => {
   hasVoted.value = !allowMultiVote && localStorage.getItem(`kaede_vote_voted_${pollId}`) === '1';
   // 物理ループ開始
   rafId = requestAnimationFrame(stepPhysics);
+  // 初回のセンター計測
+  nextTick().then(updateCenters);
+  window.addEventListener('resize', onResize);
 });
 
 onUnmounted(() => {
   if (unsubscribe) unsubscribe();
   if (rafId) cancelAnimationFrame(rafId);
   if (pollTimer) clearInterval(pollTimer);
+  window.removeEventListener('resize', onResize);
 });
 
 // コメント機能
@@ -455,8 +469,26 @@ const applyOptionsAndReset = async () => {
   options.value = lines;
   votes.value = options.value.map(() => []);
   physicsBalls.value = options.value.map(() => []);
+  pendingSpawns.value = options.value.map(() => []);
+  centers.value = options.value.map(() => ({ x: 0, y: 0 }));
   await resetVotes();
 };
+
+function updateCenters() {
+  try {
+    const st = stageRef.value?.getBoundingClientRect();
+    if (!st) return;
+    stageSize.value = { w: st.width, h: st.height };
+    centers.value = options.value.map((_, idx) => {
+      const el = spotRefs.value[idx];
+      if (!el) return { x: stageSize.value.w / 2, y: stageSize.value.h / 2 };
+      const r = el.getBoundingClientRect();
+      return { x: r.left - st.left + r.width / 2, y: r.top - st.top + r.height / 2 };
+    });
+  } catch (_) {}
+}
+
+function onResize() { updateCenters(); }
 </script>
 
 <template>
@@ -496,22 +528,25 @@ const applyOptionsAndReset = async () => {
     <hr />
     <div class="ball-results">
       <h3>投票結果</h3>
-      <div class="ball-row">
-        <div v-for="(opt, idx) in options" :key="opt" class="ball-col">
+      <!-- 集合ステージ：一枚キャンバス上に複数の集合点（スポット）を配置 -->
+      <div class="cluster-stage" ref="stageRef" @mousemove="onPointerMove" @touchmove.prevent="onPointerMove($event.touches?.[0] || $event)">
+        <!-- 集合スポット（各選択肢の中心） -->
+        <div v-for="(opt, idx) in options" :key="'spot-' + idx" class="spot" :ref="el => (spotRefs[idx] = el)">
           <div class="option-label">{{ opt }}</div>
-          <div class="option-box" :ref="el => (optionRefs[idx] = el)" :style="{ width: BOX_W + 'px', height: BOX_H + 'px' }">
-            <div
-              v-for="(b, bi) in physicsBalls[idx]"
-              :key="bi"
-              class="cluster-ball"
-              :style="{ left: b.x + 'px', top: b.y + 'px', width: (b.r*2) + 'px', height: (b.r*2) + 'px' }"
-            ></div>
-          </div>
           <div class="ball-count">{{ votes[idx].length }}票</div>
+        </div>
+        <!-- 集合中のボール群 -->
+        <div v-for="(opt, idx) in options" :key="'balls-' + idx">
+          <div
+            v-for="(b, bi) in physicsBalls[idx]"
+            :key="bi"
+            class="cluster-ball"
+            :style="{ left: b.x + 'px', top: b.y + 'px', width: (b.r*2) + 'px', height: (b.r*2) + 'px' }"
+          ></div>
         </div>
       </div>
     </div>
-    <!-- 飛翔ボールのオーバーレイ -->
+    <!-- オーバーレイ（チャージ表示と粒子のみ保持） -->
     <div class="flying-layer">
       <!-- 押下中のチャージボール（プレビューで徐々に大きく） -->
       <div v-if="charging" class="charge-ball"
@@ -535,19 +570,7 @@ const applyOptionsAndReset = async () => {
           opacity: Math.max(0, p.life)
         }"
       ></div>
-      <div
-        v-for="b in flyingBalls"
-        :key="b.id"
-        class="flying-ball"
-        :style="{
-          left: b.left + 'px',
-          top: b.top + 'px',
-          width: (b.r*2) + 'px',
-          height: (b.r*2) + 'px',
-          opacity: b.arrived ? 0.85 : 1,
-          transition: `left ${b.dur || 0.6}s cubic-bezier(0.2, 0.9, 0.2, 1.0), top ${b.dur || 0.6}s cubic-bezier(0.2, 0.9, 0.2, 1.0), opacity 0.3s ease`
-        }"
-      ></div>
+  <!-- 飛翔ボールは廃止（集合点モデルではクラスタ内で移動） -->
     </div>
     <hr />
     <div class="comment-area">
@@ -627,22 +650,8 @@ button:disabled {
 .ball-results {
   margin-bottom: 1rem;
 }
-.ball-row {
-  display: flex;
-  gap: 2rem;
-  justify-content: center;
-}
-.ball-col {
-  text-align: center;
-}
-.option-label {
-  font-weight: bold;
-  margin-bottom: 0.5rem;
-}
-.ball-count {
-  margin-top: 0.5rem;
-  font-size: 0.9rem;
-}
+.option-label { font-weight: bold; margin-bottom: 0.25rem; }
+.ball-count { font-size: 0.9rem; }
 .comment-area {
   margin-top: 1rem;
 }
@@ -714,14 +723,30 @@ button:disabled {
   pointer-events: none;
 }
 
-/* クラスタ表示 */
-.option-box {
+/* 集合ステージ全体 */
+.cluster-stage {
   position: relative;
-  margin: 0 auto;
+  margin: 0.5rem auto 0;
+  width: 100%;
+  max-width: 720px;
+  min-height: 260px;
   background: #e0f2f1;
-  border-radius: 8px;
   border: 1px solid #b2dfdb;
-  overflow: hidden;
+  border-radius: 10px;
+}
+/* 集合スポット（各選択肢の中心マーカー）*/
+.spot {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 220px;
+  height: 220px;
+  margin: 8px;
+  background: #ffffff80;
+  border: 1px dashed #80cbc4;
+  border-radius: 12px;
 }
 .cluster-ball {
   position: absolute;
