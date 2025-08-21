@@ -31,7 +31,10 @@ const selectedIdx = ref(null);
 const containerRef = ref(null); // 外枠（vote-area）
 const stageRef = ref(null); // 集合ステージ（cluster-stage）
 const spotRefs = ref([]); // 各選択肢の集合点参照
-const lastPointer = ref({ x: 0, y: 0 }); // ステージ基準の発射位置
+// 表示用: vote-area基準のカーソル位置（エフェクト描画に使用）
+const lastPointerOverlay = ref({ x: 0, y: 0 });
+// スポーン用: 直近のクライアント座標（stage基準に変換するために保持）
+const lastClient = ref({ x: 0, y: 0 });
 // 押下中の粒子エフェクトとプレビュー用チャージボール
 const particles = ref([]); // {id,x,y,vx,vy,life,size}
 let particleAcc = 0;
@@ -120,8 +123,8 @@ function stepPhysics() {
       const size = 4 + Math.random() * 6;
       particles.value.push({
         id: now + Math.random(),
-        x: lastPointer.value.x,
-        y: lastPointer.value.y,
+        x: lastPointerOverlay.value.x,
+        y: lastPointerOverlay.value.y,
         vx: Math.cos(ang) * spd,
         vy: Math.sin(ang) * spd,
         life: 1,
@@ -194,12 +197,13 @@ const startCharge = (idx, evt) => {
   selectedIdx.value = idx;
   // 発射開始位置（コンテナ基準）を記録
   try {
-    const c = stageRef.value?.getBoundingClientRect();
+    const cont = containerRef.value?.getBoundingClientRect();
     const e = evt || window.event;
     const ex = e?.clientX ?? (e?.pageX ?? 0);
     const ey = e?.clientY ?? (e?.pageY ?? 0);
-    if (c) {
-      lastPointer.value = { x: ex - c.left, y: ey - c.top };
+    lastClient.value = { x: ex, y: ey };
+    if (cont) {
+      lastPointerOverlay.value = { x: ex - cont.left, y: ey - cont.top };
     }
   } catch (_) {}
   chargeTick();
@@ -208,13 +212,12 @@ const startCharge = (idx, evt) => {
 function onPointerMove(evt) {
   if (!charging.value) return;
   try {
-  const c = stageRef.value?.getBoundingClientRect();
+  const c = containerRef.value?.getBoundingClientRect();
     const e = evt || window.event;
     const ex = e?.clientX ?? (e?.pageX ?? 0);
     const ey = e?.clientY ?? (e?.pageY ?? 0);
-    if (c) {
-      lastPointer.value = { x: ex - c.left, y: ey - c.top };
-    }
+  lastClient.value = { x: ex, y: ey };
+  if (c) lastPointerOverlay.value = { x: ex - c.left, y: ey - c.top };
   } catch (_) {}
 }
 
@@ -236,39 +239,7 @@ const endCharge = async () => {
   charging.value = false;
   const power = chargeValue.value;
   const idx = selectedIdx.value;
-  // 飛翔ボールを生成して目的地へアニメーション
-  try {
-    const c = containerRef.value?.getBoundingClientRect();
-    const box = optionRefs.value[idx];
-    let destX = lastPointer.value.x;
-    let destY = lastPointer.value.y;
-    if (c && box) {
-      const r = box.getBoundingClientRect();
-      destX = r.left - c.left + BOX_W / 2;
-      destY = r.top - c.top + BOX_H / 2;
-    }
-    const r = calcRadius(power);
-    const id = Date.now() + Math.random();
-    const dur = flightDuration(power);
-    const ball = { id, left: lastPointer.value.x, top: lastPointer.value.y, r, arrived: false, optionIndex: idx, power, dur };
-    flyingBalls.value.push(ball);
-    await nextTick();
-    // 目的地へ移動（CSSトランジション）
-    requestAnimationFrame(() => {
-      ball.left = destX;
-      ball.top = destY;
-      // 到着判定はトランジション完了相当タイミングで付与
-      setTimeout(() => {
-        ball.arrived = true;
-        nextTick().then(syncPhysicsWithVotes);
-      }, Math.round(dur * 1000));
-    });
-    // 少し余裕を持ってオーバーレイから除去
-    setTimeout(() => {
-      flyingBalls.value = flyingBalls.value.filter(b => b.id !== id);
-      nextTick().then(syncPhysicsWithVotes);
-    }, Math.round(dur * 1000) + 120);
-  } catch (_) {}
+  // 集合点モデルではオーバーレイ飛翔は行わない
   try {
     // Firestore Lite を必要時に読み込んで書き込み（リアルタイム未接続でもOK）
     await ensureFirestoreLite();
@@ -277,9 +248,11 @@ const endCharge = async () => {
       power,
       createdAt: serverTimestamp(),
     });
-    // 票に対応するボールを出現（集合点モデル）
-    // まず初期位置（押下地点）を pending に積んでおく
-    pendingSpawns.value[idx].push({ x: lastPointer.value.x, y: lastPointer.value.y });
+    // 票に対応するボールの初期位置（stage基準）を算出
+    const st = stageRef.value?.getBoundingClientRect();
+    if (st) {
+      pendingSpawns.value[idx].push({ x: lastClient.value.x - st.left, y: lastClient.value.y - st.top });
+    }
     // リアルタイム未接続時は即ローカル票に追加（同時に物体が生成され動き出す）
     if (!isRealtimeConnected.value) {
       votes.value[idx].push(power);
@@ -553,13 +526,13 @@ function onResize() { updateCenters(); }
         </div>
       </div>
     </div>
-    <!-- オーバーレイ（チャージ表示と粒子のみ保持） -->
-    <div class="flying-layer">
+  <!-- オーバーレイ（チャージ表示と粒子のみ保持／vote-area基準） -->
+  <div class="flying-layer">
       <!-- 押下中のチャージボール（プレビューで徐々に大きく） -->
-      <div v-if="charging" class="charge-ball"
+    <div v-if="charging" class="charge-ball"
         :style="{
-          left: lastPointer.x + 'px',
-          top: lastPointer.y + 'px',
+      left: lastPointerOverlay.x + 'px',
+      top: lastPointerOverlay.y + 'px',
           width: (calcRadius(chargeValue) * 2) + 'px',
           height: (calcRadius(chargeValue) * 2) + 'px'
         }"
