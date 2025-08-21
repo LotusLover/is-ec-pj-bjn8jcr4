@@ -1,8 +1,8 @@
 import { ref, watch } from 'vue';
 
 // Lightweight composable to encapsulate Firestore logic used by Kaede_Vote.vue
-export function useFirestore(pollId, themeRef) {
-  const votes = ref([]);
+export function useFirestore(pollId: any, themeRef: any) {
+  const votes = ref<any[][]>([]);
   const isRealtimeConnected = ref(false);
   const connectingRealtime = ref(false);
   const isPollingFallback = ref(false);
@@ -66,8 +66,8 @@ export function useFirestore(pollId, themeRef) {
         firestoreMode = 'full';
       }
       const q = query(votesColRef, orderBy('createdAt', 'asc'));
-      unsubscribe = onSnapshot(q, (snap) => {
-        const arrs = [];
+      unsubscribe = onSnapshot(q, (snap: any) => {
+        const arrs: any[] = [];
         // initialize based on theme config length later; for now collect into map
         snap.forEach((d: any) => {
           const data = d.data();
@@ -77,8 +77,7 @@ export function useFirestore(pollId, themeRef) {
           }
         });
         // normalize to arrays
-        const max = arrs.length || 0;
-        votes.value = arrs.map(a => a || []);
+        votes.value = arrs.map((a: any) => a || []);
       }, (err:any) => {
         realtimeError.value = 'リアルタイム接続に失敗: ' + (err?.message || err);
         if (unsubscribe) { unsubscribe(); unsubscribe = null; }
@@ -109,7 +108,7 @@ export function useFirestore(pollId, themeRef) {
       try {
         await ensureFirestoreLite();
         const snap = await getDocs(votesColRef);
-        const arrs:any[] = [];
+        const arrs: any[] = [];
         snap.forEach((d:any) => {
           const data = d.data();
           if (typeof data.optionIndex === 'number' && typeof data.power === 'number') {
@@ -117,7 +116,7 @@ export function useFirestore(pollId, themeRef) {
             arrs[data.optionIndex].push(data.power);
           }
         });
-        votes.value = arrs.map(a => a || []);
+        votes.value = arrs.map((a:any) => a || []);
       } catch (_) {}
     }, 2000);
   }
