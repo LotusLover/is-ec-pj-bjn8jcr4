@@ -32,6 +32,16 @@ const containerRef = ref(null);
 const optionRefs = ref([]); // 各選択肢の集積ボックス参照
 const flyingBalls = ref([]); // 画面上を飛ぶ一時的なボール（{id,left,top,r,arrived,optionIndex,power}）
 const lastPointer = ref({ x: 0, y: 0 }); // コンテナ基準の発射位置
+// 押下中の粒子エフェクトとプレビュー用チャージボール
+const particles = ref([]); // {id,x,y,vx,vy,life,size}
+let particleAcc = 0;
+let lastTimeMs = performance.now();
+
+function flightDuration(power) {
+  const t = Math.max(0, Math.min(1, power / chargeMax));
+  // 強い力ほど速く（短く）飛ぶ: 0.7s -> 0.2s
+  return 0.2 + (0.7 - 0.2) * (1 - t);
+}
 
 // 疑似物理: 各選択肢のボール群を2Dで吸引・分離
 const BOX_W = 120;
@@ -85,6 +95,44 @@ function syncPhysicsWithVotes() {
 
 let rafId = 0;
 function stepPhysics() {
+  // dt を計算（粒子用）
+  const now = performance.now();
+  const dt = Math.min(0.05, (now - lastTimeMs) / 1000);
+  lastTimeMs = now;
+  // 粒子の生成（押下中のみ）
+  if (charging.value) {
+    const t = Math.max(0, Math.min(1, chargeValue.value / chargeMax));
+    const rate = 20 + 120 * t; // 1秒あたりの生成数
+    particleAcc += rate * dt;
+    let spawnCount = Math.floor(particleAcc);
+    particleAcc -= spawnCount;
+    // 上限保護
+    if (particles.value.length > 220) spawnCount = 0;
+    while (spawnCount-- > 0) {
+      const ang = Math.random() * Math.PI * 2;
+      const spd = 0.8 + 4.2 * t + Math.random() * 0.6; // px/フレーム相当
+      const size = 4 + Math.random() * 6;
+      particles.value.push({
+        id: now + Math.random(),
+        x: lastPointer.value.x,
+        y: lastPointer.value.y,
+        vx: Math.cos(ang) * spd,
+        vy: Math.sin(ang) * spd,
+        life: 1,
+        size,
+      });
+    }
+  }
+  // 粒子の更新と減衰
+  if (particles.value.length) {
+    for (let i = particles.value.length - 1; i >= 0; i--) {
+      const p = particles.value[i];
+      p.x += p.vx; p.y += p.vy;
+      p.vx *= 0.985; p.vy *= 0.985;
+      p.life -= dt * 1.6;
+      if (p.life <= 0) particles.value.splice(i, 1);
+    }
+  }
   for (let idx = 0; idx < physicsBalls.value.length; idx++) {
     const arr = physicsBalls.value[idx];
     const cx = BOX_W / 2;
@@ -149,6 +197,19 @@ const startCharge = (idx, evt) => {
   chargeTick();
 };
 
+function onPointerMove(evt) {
+  if (!charging.value) return;
+  try {
+    const c = containerRef.value?.getBoundingClientRect();
+    const e = evt || window.event;
+    const ex = e?.clientX ?? (e?.pageX ?? 0);
+    const ey = e?.clientY ?? (e?.pageY ?? 0);
+    if (c) {
+      lastPointer.value = { x: ex - c.left, y: ey - c.top };
+    }
+  } catch (_) {}
+}
+
 // 力をためるループ
 function chargeTick() {
   if (!charging.value) return;
@@ -178,9 +239,10 @@ const endCharge = async () => {
       destX = r.left - c.left + BOX_W / 2;
       destY = r.top - c.top + BOX_H / 2;
     }
-  const r = calcRadius(power);
-  const id = Date.now() + Math.random();
-  const ball = { id, left: lastPointer.value.x, top: lastPointer.value.y, r, arrived: false, optionIndex: idx, power };
+    const r = calcRadius(power);
+    const id = Date.now() + Math.random();
+    const dur = flightDuration(power);
+    const ball = { id, left: lastPointer.value.x, top: lastPointer.value.y, r, arrived: false, optionIndex: idx, power, dur };
     flyingBalls.value.push(ball);
     await nextTick();
     // 目的地へ移動（CSSトランジション）
@@ -191,13 +253,13 @@ const endCharge = async () => {
       setTimeout(() => {
         ball.arrived = true;
         nextTick().then(syncPhysicsWithVotes);
-      }, 600);
+      }, Math.round(dur * 1000));
     });
     // 少し余裕を持ってオーバーレイから除去
     setTimeout(() => {
       flyingBalls.value = flyingBalls.value.filter(b => b.id !== id);
       nextTick().then(syncPhysicsWithVotes);
-    }, 700);
+    }, Math.round(dur * 1000) + 120);
   } catch (_) {}
   try {
     // Firestore Lite を必要時に読み込んで書き込み（リアルタイム未接続でもOK）
@@ -393,6 +455,8 @@ const applyOptionsAndReset = async () => {
           @mouseup="endCharge"
           @mouseleave="endCharge"
           @touchend.prevent="endCharge"
+          @mousemove="onPointerMove"
+          @touchmove.prevent="onPointerMove($event.touches?.[0] || $event)"
         >
           {{ opt }}に力をためて投票！
         </button>
@@ -426,6 +490,28 @@ const applyOptionsAndReset = async () => {
     </div>
     <!-- 飛翔ボールのオーバーレイ -->
     <div class="flying-layer">
+      <!-- 押下中のチャージボール（プレビューで徐々に大きく） -->
+      <div v-if="charging" class="charge-ball"
+        :style="{
+          left: lastPointer.x + 'px',
+          top: lastPointer.y + 'px',
+          width: (calcRadius(chargeValue) * 2) + 'px',
+          height: (calcRadius(chargeValue) * 2) + 'px'
+        }"
+      ></div>
+      <!-- 粒子 -->
+      <div
+        v-for="p in particles"
+        :key="p.id"
+        class="particle"
+        :style="{
+          left: p.x + 'px',
+          top: p.y + 'px',
+          width: p.size + 'px',
+          height: p.size + 'px',
+          opacity: Math.max(0, p.life)
+        }"
+      ></div>
       <div
         v-for="b in flyingBalls"
         :key="b.id"
@@ -435,7 +521,8 @@ const applyOptionsAndReset = async () => {
           top: b.top + 'px',
           width: (b.r*2) + 'px',
           height: (b.r*2) + 'px',
-          opacity: b.arrived ? 0.85 : 1
+          opacity: b.arrived ? 0.85 : 1,
+          transition: `left ${b.dur || 0.6}s cubic-bezier(0.2, 0.9, 0.2, 1.0), top ${b.dur || 0.6}s cubic-bezier(0.2, 0.9, 0.2, 1.0), opacity 0.3s ease`
         }"
       ></div>
     </div>
@@ -584,8 +671,24 @@ button:disabled {
   /* 光沢をなくしフラットに */
   background: #26a69a;
   transform: translate(-50%, -50%);
-  transition: left 0.6s ease, top 0.6s ease, opacity 0.3s ease;
+  transition: left 0.6s cubic-bezier(0.2, 0.9, 0.2, 1.0), top 0.6s cubic-bezier(0.2, 0.9, 0.2, 1.0), opacity 0.3s ease;
   box-shadow: 0 4px 10px rgba(0,0,0,0.16);
+}
+
+.charge-ball {
+  position: absolute;
+  border-radius: 50%;
+  background: #26a69a;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 2px 6px rgba(0,0,0,0.12);
+}
+
+.particle {
+  position: absolute;
+  border-radius: 50%;
+  background: #80cbc4;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
 }
 
 /* クラスタ表示 */
