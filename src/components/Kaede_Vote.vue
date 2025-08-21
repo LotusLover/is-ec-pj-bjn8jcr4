@@ -1,7 +1,10 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue';
 let db;
-let collection, addDoc, serverTimestamp, onSnapshot, query, orderBy, getDocs, deleteDoc, doc;
+// Firestoreは動的読み込み。まずは lite API（書き込み/読み出し）だけ読み込む。
+let collection, addDoc, serverTimestamp, onSnapshot, query, orderBy, getDocs, deleteDoc, doc, getFirestore;
+const firebaseApp = ref(null);
+let firestoreMode = 'none'; // 'none' | 'lite' | 'full'
 
 // 選択肢（編集可能にするためref）
 const options = ref(['A案', 'B案', 'C案']);
@@ -54,15 +57,16 @@ const endCharge = async () => {
   const power = chargeValue.value;
   const idx = selectedIdx.value;
   try {
-    if (!votesColRef) {
-      // 初期化前はローカルに積む
+    // Firestore Lite を必要時に読み込んで書き込み（リアルタイム未接続でもOK）
+    await ensureFirestoreLite();
+    await addDoc(votesColRef, {
+      optionIndex: idx,
+      power,
+      createdAt: serverTimestamp(),
+    });
+    // リアルタイム未接続時はローカルへも反映
+    if (!isRealtimeConnected.value) {
       votes.value[idx].push(power);
-    } else {
-      await addDoc(votesColRef, {
-        optionIndex: idx,
-        power,
-        createdAt: serverTimestamp(),
-      });
     }
     // 一人一票（ローカルに記録）※開発時は無効
     if (!allowMultiVote) {
@@ -77,30 +81,51 @@ const endCharge = async () => {
   }
 };
 
-// 起動時にリアルタイム購読を開始し、ローカルに反映
+// Firestore/Lite を必要な時だけ読み込む（書き込み・リセット用）
+async function ensureFirestoreLite() {
+  if (!firebaseApp.value) {
+    const firebaseMod = await import('../firebase');
+    firebaseApp.value = firebaseMod.app;
+  }
+  if (firestoreMode === 'none') {
+    const mod = await import('firebase/firestore/lite');
+    ({ collection, addDoc, serverTimestamp, getDocs, deleteDoc, doc, getFirestore } = mod);
+    db = getFirestore(firebaseApp.value);
+    votesColRef = collection(db, 'polls', pollId, 'votes');
+    firestoreMode = 'lite';
+  }
+}
+
+// リアルタイム購読はユーザー操作で開始（初期読み込みを軽く）
 let unsubscribe = null;
-onMounted(async () => {
-  // 投票済み状態を復元（複数投票可のときは常にfalse）
-  hasVoted.value = !allowMultiVote && localStorage.getItem(`kaede_vote_voted_${pollId}`) === '1';
-
-  // Firebaseの動的import
-  const mod = await import('firebase/firestore');
-  ({ collection, addDoc, serverTimestamp, onSnapshot, query, orderBy, getDocs, deleteDoc, doc } = mod);
-  const firebaseMod = await import('../firebase');
-  db = firebaseMod.db;
-  votesColRef = collection(db, 'polls', pollId, 'votes');
-
+const isRealtimeConnected = ref(false);
+async function connectRealtime() {
+  await ensureFirestoreLite();
+  if (firestoreMode !== 'full') {
+    const mod = await import('firebase/firestore');
+    ({ collection, addDoc, serverTimestamp, onSnapshot, query, orderBy, getDocs, deleteDoc, doc, getFirestore } = mod);
+    db = getFirestore(firebaseApp.value);
+    votesColRef = collection(db, 'polls', pollId, 'votes');
+    firestoreMode = 'full';
+  }
+  if (unsubscribe) return; // すでに接続済み
   const q = query(votesColRef, orderBy('createdAt', 'asc'));
   unsubscribe = onSnapshot(q, (snap) => {
     const arrs = options.value.map(() => []);
-    snap.forEach((doc) => {
-      const d = doc.data();
-      if (typeof d.optionIndex === 'number' && typeof d.power === 'number' && arrs[d.optionIndex]) {
-        arrs[d.optionIndex].push(d.power);
+    snap.forEach((d) => {
+      const data = d.data();
+      if (typeof data.optionIndex === 'number' && typeof data.power === 'number' && arrs[data.optionIndex]) {
+        arrs[data.optionIndex].push(data.power);
       }
     });
     votes.value = arrs;
   });
+  isRealtimeConnected.value = true;
+}
+
+// 起動時はローカル状態のみ（Firebaseは未接続）
+onMounted(() => {
+  hasVoted.value = !allowMultiVote && localStorage.getItem(`kaede_vote_voted_${pollId}`) === '1';
 });
 
 onUnmounted(() => {
@@ -124,7 +149,7 @@ const editableOptionsText = ref(options.value.join('\n'));
 const resetting = ref(false);
 
 const resetVotes = async () => {
-  if (!votesColRef || !getDocs || !deleteDoc || !doc) return;
+  await ensureFirestoreLite();
   resetting.value = true;
   try {
     const snap = await getDocs(votesColRef);
@@ -158,6 +183,10 @@ const applyOptionsAndReset = async () => {
 <template>
   <div class="vote-area">
     <h2>力をためて投票ツール（Mentimeter風・リアルタイム）</h2>
+    <div class="realtime-toggle">
+      <button v-if="!isRealtimeConnected" @click="connectRealtime">リアルタイム受信を開始</button>
+      <span v-else class="connected">リアルタイム受信中</span>
+    </div>
     <div class="options">
   <label v-for="(opt, idx) in options" :key="opt + '-' + idx">
         <button
@@ -329,4 +358,6 @@ button:disabled {
 }
 .small-note { font-size: 0.85rem; color: #004d40; margin: 0 0 0.5rem; }
 .resetting { color: #004d40; }
+.realtime-toggle { margin-bottom: 0.5rem; }
+.connected { color: #00695c; font-weight: bold; }
 </style>

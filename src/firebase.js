@@ -1,6 +1,5 @@
 // firebase.js
 import { initializeApp } from "firebase/app";
-import { getFirestore } from "firebase/firestore";
 
 // Firebaseの設定（Firebaseコンソールの値を使用）
 const firebaseConfig = {
@@ -17,7 +16,5 @@ const firebaseConfig = {
 // Firebaseを初期化
 const app = initializeApp(firebaseConfig);
 
-// Firestoreのインスタンスを取得
-const db = getFirestore(app);
-
-export { db };
+// Firestoreは各コンポーネント側で必要時に dynamic import し、getFirestore(app) を呼び出します。
+export { app };
