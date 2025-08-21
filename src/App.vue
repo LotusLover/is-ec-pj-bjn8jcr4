@@ -16,7 +16,8 @@ const argId = '-asg.vue';
 // コンポーネントがマウントされたときに実行される処理
 onMounted(() => {
   // インポートしたコンポーネントのファイル名を取得
-  fileName.value = myComponent.__file.replace(/^.*[\\\/]/, '');
+  const raw = (myComponent as any)?.__file as string | undefined;
+  fileName.value = raw ? raw.replace(/^.*[\\\/]/, '') : '';
   // ファイル名に「-asg.vue」が含まれているか判定
   if (-1 < fileName.value.lastIndexOf(argId)) {
     // 「-asg.vue」を除いた名前に変更

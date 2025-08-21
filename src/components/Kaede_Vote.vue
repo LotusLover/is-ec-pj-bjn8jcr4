@@ -90,12 +90,14 @@ function syncPhysicsWithVotes() {
       const i = arr.length; // 新規のインデックス
       const power = votes.value[idx][i];
       const r = calcRadius(power);
-      const spawn = pendingSpawns.value[idx]?.shift() || null;
+  const spawn = pendingSpawns.value[idx]?.shift() || null;
       const cx = centers.value[idx]?.x ?? stageSize.value.w / 2;
       const cy = centers.value[idx]?.y ?? stageSize.value.h / 2;
-      const sx = spawn?.x ?? (cx + (Math.random() - 0.5) * 12);
-      const sy = spawn?.y ?? (cy + (Math.random() - 0.5) * 12);
-      arr.push({ x: sx, y: sy, vx: 0, vy: 0, r });
+  const sx = spawn?.x ?? (cx + (Math.random() - 0.5) * 12);
+  const sy = spawn?.y ?? (cy + (Math.random() - 0.5) * 12);
+  const svx = spawn?.vx ?? 0;
+  const svy = spawn?.vy ?? 0;
+  arr.push({ x: sx, y: sy, vx: svx, vy: svy, r });
     }
     // 削除
     while (arr.length > visibleTarget) arr.pop();
@@ -248,11 +250,9 @@ const endCharge = async () => {
       power,
       createdAt: serverTimestamp(),
     });
-    // 票に対応するボールの初期位置（stage基準）を算出
-    const st = stageRef.value?.getBoundingClientRect();
-    if (st) {
-      pendingSpawns.value[idx].push({ x: lastClient.value.x - st.left, y: lastClient.value.y - st.top });
-    }
+    // 票に対応するボールの初期位置（stage基準）と初速を算出
+    const spawn = computeSpawnForVote(idx, power);
+    if (spawn) pendingSpawns.value[idx].push(spawn);
     // リアルタイム未接続時は即ローカル票に追加（同時に物体が生成され動き出す）
     if (!isRealtimeConnected.value) {
       votes.value[idx].push(power);
@@ -468,6 +468,67 @@ function updateCenters() {
 }
 
 function onResize() { updateCenters(); }
+
+// 押下位置（client座標）→集合点中心へ向かう線とステージ矩形の交点を初期位置にし、力に応じた初速を付与
+function computeSpawnForVote(idx, power) {
+  try {
+    const st = stageRef.value?.getBoundingClientRect();
+    if (!st) return null;
+    const w = st.width, h = st.height;
+    const p0x = lastClient.value.x, p0y = lastClient.value.y;
+    const ctr = centers.value[idx] || { x: w / 2, y: h / 2 };
+    const p1x = st.left + ctr.x, p1y = st.top + ctr.y;
+    const dx = p1x - p0x, dy = p1y - p0y;
+    if (dx === 0 && dy === 0) {
+      return { x: ctr.x, y: ctr.y, vx: 0, vy: 0 };
+    }
+    const candidates = [];
+    // 左右
+    if (dx !== 0) {
+      let t = (st.left - p0x) / dx; // 左
+      let y = p0y + t * dy;
+      if (t >= 0 && t <= 1 && y >= st.top && y <= st.bottom) candidates.push({ t, x: st.left, y });
+      t = (st.right - p0x) / dx; // 右
+      y = p0y + t * dy;
+      if (t >= 0 && t <= 1 && y >= st.top && y <= st.bottom) candidates.push({ t, x: st.right, y });
+    }
+    // 上下
+    if (dy !== 0) {
+      let t = (st.top - p0y) / dy; // 上
+      let x = p0x + t * dx;
+      if (t >= 0 && t <= 1 && x >= st.left && x <= st.right) candidates.push({ t, x, y: st.top });
+      t = (st.bottom - p0y) / dy; // 下
+      x = p0x + t * dx;
+      if (t >= 0 && t <= 1 && x >= st.left && x <= st.right) candidates.push({ t, x, y: st.bottom });
+    }
+    let spawnClient;
+    const inside = p0x >= st.left && p0x <= st.right && p0y >= st.top && p0y <= st.bottom;
+    if (inside) {
+      spawnClient = { x: p0x, y: p0y };
+    } else if (candidates.length) {
+      candidates.sort((a, b) => a.t - b.t);
+      spawnClient = { x: candidates[0].x, y: candidates[0].y };
+    } else {
+      // フォールバック: ステージ中心
+      spawnClient = { x: st.left + w / 2, y: st.top + h / 2 };
+    }
+    // ステージ内側へ少しオフセット
+    const dirx = (p1x - spawnClient.x);
+    const diry = (p1y - spawnClient.y);
+    const dlen = Math.hypot(dirx, diry) || 1;
+    const inward = 6; // 内側へ6px
+    const sx = spawnClient.x + (dirx / dlen) * inward;
+    const sy = spawnClient.y + (diry / dlen) * inward;
+    // 初速（力に応じて加速）
+    const t = Math.max(0, Math.min(1, power / chargeMax));
+    const speed = 4 + 12 * t; // px/フレーム相当
+    const vx = (dirx / dlen) * speed;
+    const vy = (diry / dlen) * speed;
+    return { x: sx - st.left, y: sy - st.top, vx, vy };
+  } catch (_) {
+    return null;
+  }
+}
 </script>
 
 <template>
