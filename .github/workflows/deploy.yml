@@ -31,9 +31,9 @@ jobs:
         run: npm install
 
       - name: Build (Vite)
-        run: |
-          echo "BUILD_TARGET=pages" >> $GITHUB_ENV
-          npm run build
+        env:
+          BUILD_TARGET: pages
+        run: npm run build
 
       - name: Add SPA fallback (404.html)
         run: cp dist/index.html dist/404.html
