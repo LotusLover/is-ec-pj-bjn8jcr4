@@ -3,6 +3,8 @@ import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue';
 let db;
 // Firestoreは動的読み込み。まずは lite API（書き込み/読み出し）だけ読み込む。
 let collection, addDoc, serverTimestamp, onSnapshot, query, orderBy, getDocs, deleteDoc, doc, getFirestore, setDoc, getDoc;
+// optional function from full firestore bundle to enable multi-tab persistence
+let enableMultiTabIndexedDbPersistence;
 const firebaseApp = ref(null);
 let firestoreMode = 'none'; // 'none' | 'lite' | 'full'
 
@@ -356,8 +358,10 @@ async function connectRealtime() {
       const mod = await import('firebase/firestore');
   ({ collection, addDoc, serverTimestamp, onSnapshot, query, orderBy, getDocs, deleteDoc, doc, getFirestore, setDoc, getDoc, enableMultiTabIndexedDbPersistence } = mod);
       db = getFirestore(firebaseApp.value);
-      // 複数タブでの同時接続を許可（失敗しても継続）
-      try { await enableMultiTabIndexedDbPersistence(db); } catch (_) { /* noop */ }
+      // 複数タブでの同時接続を許可（関数が存在する場合のみ呼び出す。失敗しても継続）
+      if (typeof enableMultiTabIndexedDbPersistence === 'function') {
+        try { await enableMultiTabIndexedDbPersistence(db); } catch (_) { /* noop */ }
+      }
   updateVotesRef();
       firestoreMode = 'full';
     }
