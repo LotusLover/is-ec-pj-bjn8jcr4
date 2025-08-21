@@ -1,21 +1,34 @@
+//起動までめちゃくちゃ時間がかかる
+
 <script setup>
 import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue';
-let db;
-// Firestoreは動的読み込み。まずは lite API（書き込み/読み出し）だけ読み込む。
-let collection, addDoc, serverTimestamp, onSnapshot, query, orderBy, getDocs, deleteDoc, doc, getFirestore, setDoc, getDoc;
-// optional function from full firestore bundle to enable multi-tab persistence
-let enableMultiTabIndexedDbPersistence;
-const firebaseApp = ref(null);
-let firestoreMode = 'none'; // 'none' | 'lite' | 'full'
+import { useFirestore } from '../composables/useFirestore';
+
+// Firestore ロジックは composable に委譲
+let db; // 互換性のため残すが、直接は使わない
 
 // 選択肢（編集可能にするためref）
 const options = ref(['A案', 'B案', 'C案']);
-// 各選択肢ごとの投票（力）配列。例: [[力1, 力2], [力1], [力1, 力2, 力3]]
-const votes = ref(options.value.map(() => []));
 
 // 投票を保存する先（pollIdで投票ルームを分けられる）
 const pollId = 'default';
-let votesColRef;
+
+// Firestore 関連は composable に委譲
+const {
+  votes,
+  connectRealtime,
+  disconnectRealtime,
+  addVote,
+  loadOptionsConfig,
+  saveOptionsConfig,
+  resetVotes: resetVotesFirestore,
+  ensureFirestoreLite,
+  isRealtimeConnected,
+  connectingRealtime,
+  realtimeError,
+  isPollingFallback,
+} = useFirestore(pollId, currentTheme);
+
 // テーマ（同じルーム内で複数トピックを切り替え）
 const currentTheme = ref('main');
 const newThemeName = ref('main');
@@ -271,13 +284,8 @@ const endCharge = async () => {
   const idx = selectedIdx.value;
   // 集合点モデルではオーバーレイ飛翔は行わない
   try {
-    // Firestore Lite を必要時に読み込んで書き込み（リアルタイム未接続でもOK）
-    await ensureFirestoreLite();
-    await addDoc(votesColRef, {
-      optionIndex: idx,
-      power,
-      createdAt: serverTimestamp(),
-    });
+  // Firestore へ投票を書き込む（composable 経由）
+  await addVote(idx, power);
     // 票に対応するボールの初期位置（stage基準）と初速を算出
     const spawn = computeSpawnForVote(idx, power);
     if (spawn) pendingSpawns.value[idx].push(spawn);
@@ -297,123 +305,7 @@ const endCharge = async () => {
   }
 };
 
-// Firestore/Lite を必要な時だけ読み込む（書き込み・リセット用）
-async function ensureFirestoreLite() {
-  if (!firebaseApp.value) {
-    // ローカルモジュールに依存せず、ここで直接初期化
-    const { initializeApp } = await import('firebase/app');
-    const firebaseConfig = {
-      apiKey: "AIzaSyB1ZKM2j8epqauRiYnlwd9GemHw5qltyOk",
-      authDomain: "kaede-vote-back.firebaseapp.com",
-      projectId: "kaede-vote-back",
-      storageBucket: "kaede-vote-back.firebasestorage.app",
-      messagingSenderId: "612230015492",
-      appId: "1:612230015492:web:285cef7c4a267d0ecde351",
-      measurementId: "G-SY3402QMCD"
-    };
-    firebaseApp.value = initializeApp(firebaseConfig);
-  }
-  if (firestoreMode === 'none') {
-    const mod = await import('firebase/firestore/lite');
-    ({ collection, addDoc, serverTimestamp, getDocs, deleteDoc, doc, getFirestore, setDoc, getDoc } = mod);
-    db = getFirestore(firebaseApp.value);
-    updateVotesRef();
-    firestoreMode = 'lite';
-  }
-}
-
-function updateVotesRef() {
-  if (!db) return;
-  // polls/{pollId}/themes/{theme}/votes
-  votesColRef = collection(db, 'polls', pollId, 'themes', currentTheme.value, 'votes');
-}
-
-// リアルタイム購読はユーザー操作で開始（初期読み込みを軽く）
-let unsubscribe = null;
-const isRealtimeConnected = ref(false);
-const isPollingFallback = ref(false);
-const connectingRealtime = ref(false);
-const realtimeError = ref('');
-let pollTimer = 0;
-async function connectRealtime() {
-  if (unsubscribe) return; // すでに接続済み
-  connectingRealtime.value = true;
-  realtimeError.value = '';
-  try {
-    await ensureFirestoreLite();
-    // 念のため未初期化ならここでも初期化
-    if (!firebaseApp.value) {
-      const { initializeApp } = await import('firebase/app');
-      firebaseApp.value = initializeApp({
-        apiKey: "AIzaSyB1ZKM2j8epqauRiYnlwd9GemHw5qltyOk",
-        authDomain: "kaede-vote-back.firebaseapp.com",
-        projectId: "kaede-vote-back",
-        storageBucket: "kaede-vote-back.firebasestorage.app",
-        messagingSenderId: "612230015492",
-        appId: "1:612230015492:web:285cef7c4a267d0ecde351",
-        measurementId: "G-SY3402QMCD"
-      });
-    }
-    if (firestoreMode !== 'full') {
-      const mod = await import('firebase/firestore');
-  ({ collection, addDoc, serverTimestamp, onSnapshot, query, orderBy, getDocs, deleteDoc, doc, getFirestore, setDoc, getDoc, enableMultiTabIndexedDbPersistence } = mod);
-      db = getFirestore(firebaseApp.value);
-      // 複数タブでの同時接続を許可（関数が存在する場合のみ呼び出す。失敗しても継続）
-      if (typeof enableMultiTabIndexedDbPersistence === 'function') {
-        try { await enableMultiTabIndexedDbPersistence(db); } catch (_) { /* noop */ }
-      }
-  updateVotesRef();
-      firestoreMode = 'full';
-    }
-    const q = query(votesColRef, orderBy('createdAt', 'asc'));
-  unsubscribe = onSnapshot(q, (snap) => {
-      const arrs = options.value.map(() => []);
-      snap.forEach((d) => {
-        const data = d.data();
-        if (typeof data.optionIndex === 'number' && typeof data.power === 'number' && arrs[data.optionIndex]) {
-          arrs[data.optionIndex].push(data.power);
-        }
-      });
-      votes.value = arrs;
-      nextTick().then(syncPhysicsWithVotes);
-    }, (err) => {
-      // スナップショットのエラー時はポーリングにフォールバック
-      realtimeError.value = 'リアルタイム接続に失敗: ' + (err?.message || err);
-      if (unsubscribe) { unsubscribe(); unsubscribe = null; }
-      startPollingFallback();
-    });
-    isRealtimeConnected.value = true;
-  // 成功したらフォールバックを停止
-  if (pollTimer) { clearInterval(pollTimer); pollTimer = 0; }
-  isPollingFallback.value = false;
-  } catch (e) {
-    realtimeError.value = '接続初期化でエラー: ' + (e?.message || e);
-    startPollingFallback();
-  } finally {
-    connectingRealtime.value = false;
-  }
-}
-
-function startPollingFallback() {
-  isPollingFallback.value = true;
-  // 2秒ごとに最新票を取得
-  if (pollTimer) clearInterval(pollTimer);
-  pollTimer = setInterval(async () => {
-    try {
-      await ensureFirestoreLite();
-      const snap = await getDocs(votesColRef);
-      const arrs = options.value.map(() => []);
-      snap.forEach((d) => {
-        const data = d.data();
-        if (typeof data.optionIndex === 'number' && typeof data.power === 'number' && arrs[data.optionIndex]) {
-          arrs[data.optionIndex].push(data.power);
-        }
-      });
-      votes.value = arrs;
-      nextTick().then(syncPhysicsWithVotes);
-    } catch (_) { /* noop */ }
-  }, 2000);
-}
+// Firestore の購読・接続ロジックは composable に委譲されています
 
 // 起動時はローカル状態のみ（Firebaseは未接続）
 onMounted(() => {
@@ -433,9 +325,9 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
-  if (unsubscribe) unsubscribe();
+  // composable による接続解除
+  disconnectRealtime();
   if (rafId) cancelAnimationFrame(rafId);
-  if (pollTimer) clearInterval(pollTimer);
   window.removeEventListener('resize', onResize);
 });
 
@@ -450,22 +342,16 @@ watch(ballColor, (c) => {
 // テーマ変更時の処理
 watch(currentTheme, async (t, prev) => {
   try { localStorage.setItem('kaede_current_theme', t || 'main'); } catch (_) {}
-  await ensureFirestoreLite();
-  updateVotesRef();
+  // composable の参照を更新する（内部で参照を監視しているためここではロードのみ行う）
   // 状態クリア
   votes.value = options.value.map(() => []);
   physicsBalls.value = options.value.map(() => []);
   pendingSpawns.value = options.value.map(() => []);
   centers.value = options.value.map(() => ({ x: 0, y: 0 }));
-  // リアルタイムを張り直し
+  // リアルタイム接続を再接続する必要があるかは composable の状態を参照
   const wasRealtime = isRealtimeConnected.value;
-  if (unsubscribe) { unsubscribe(); unsubscribe = null; }
-  isRealtimeConnected.value = false;
-  if (pollTimer) { clearInterval(pollTimer); pollTimer = 0; }
-  isPollingFallback.value = false;
   // 設定読み込み
   await loadOptionsConfig();
-  // 必要なら再接続
   if (wasRealtime) connectRealtime();
 });
 
@@ -487,15 +373,11 @@ const resetting = ref(false);
 const savingOptions = ref(false);
 
 const resetVotes = async () => {
-  await ensureFirestoreLite();
   resetting.value = true;
   try {
-    const snap = await getDocs(votesColRef);
-    const tasks = [];
-    snap.forEach((d) => tasks.push(deleteDoc(doc(votesColRef, d.id))));
-    await Promise.all(tasks);
+    await resetVotesFirestore();
     votes.value = options.value.map(() => []);
-  physicsBalls.value = options.value.map(() => []);
+    physicsBalls.value = options.value.map(() => []);
     if (!allowMultiVote) {
       localStorage.removeItem(`kaede_vote_voted_${pollId}`);
       hasVoted.value = false;
@@ -520,9 +402,9 @@ const applyOptionsAndReset = async () => {
   physicsBalls.value = options.value.map(() => []);
   pendingSpawns.value = options.value.map(() => []);
   centers.value = options.value.map(() => ({ x: 0, y: 0 }));
-  // Firestoreへオプションと色を保存し、票はリセット
-  await saveOptionsConfig();
-  await resetVotes();
+  // Firestoreへオプションと色を保存し、票はリセット（composable 経由）
+  await saveOptionsConfig(options.value, optionColors.value);
+  await resetVotesFirestore();
 };
 
 function defaultColor(i) {
@@ -535,53 +417,7 @@ function fillColorsToLength(colors, len) {
   return out;
 }
 
-async function saveOptionsConfig() {
-  try {
-    savingOptions.value = true;
-    await ensureFirestoreLite();
-    const cfgRef = doc(db, 'polls', pollId, 'themes', currentTheme.value);
-    await setDoc(cfgRef, {
-      options: options.value,
-      optionColors: optionColors.value,
-      updatedAt: new Date().toISOString(),
-    }, { merge: true });
-  } finally {
-    savingOptions.value = false;
-  }
-}
-
-async function loadOptionsConfig() {
-  try {
-    await ensureFirestoreLite();
-    const cfgRef = doc(db, 'polls', pollId, 'themes', currentTheme.value);
-    const snap = await getDoc(cfgRef);
-    if (snap.exists()) {
-      const data = snap.data() || {};
-      if (Array.isArray(data.options) && data.options.length) {
-        options.value = data.options.map(String);
-        editableOptionsText.value = options.value.join('\n');
-      }
-      if (Array.isArray(data.optionColors)) {
-        optionColors.value = fillColorsToLength(data.optionColors, options.value.length);
-      } else {
-        optionColors.value = fillColorsToLength([], options.value.length);
-      }
-      ensurePhysicsShape();
-      nextTick().then(updateCenters);
-    } else {
-      // 初回は現在の設定を書き出す
-      optionColors.value = fillColorsToLength(optionColors.value, options.value.length);
-      await saveOptionsConfig();
-    }
-  } catch (_) {
-    // 失敗時はデフォルト長に合わせる
-    optionColors.value = fillColorsToLength(optionColors.value, options.value.length);
-  }
-}
-
-async function saveOptionColors() {
-  await saveOptionsConfig();
-}
+// saveOptionsConfig/loadOptionsConfig/saveOptionColors は composable を使用する
 
 function updateCenters() {
   try {
