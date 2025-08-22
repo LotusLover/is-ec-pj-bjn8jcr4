@@ -203,7 +203,7 @@ watch(() => props.optionColors, () => nextTick().then(syncPhysicsWithVotes), { d
   <div class="cluster-stage" ref="stageRef">
     <div v-for="(opt, idx) in options" :key="'spot-'+idx" class="spot" :ref="el => (spotRefs[idx] = el as any)">
       <div class="spot-center" :style="{ background: optionColors[idx] || '#26a69a' }"></div>
-      <div class="option-label">{{ opt }}</div>
+      <div class="option-label" :style="{ color: optionColors[idx] || '#26a69a' }">{{ opt }}</div>
       <div class="ball-count">{{ (votes[idx]?.length) || 0 }}票</div>
     </div>
     <div v-for="(arr, idx) in physicsBalls" :key="'balls-'+idx">
@@ -257,7 +257,7 @@ watch(() => props.optionColors, () => nextTick().then(syncPhysicsWithVotes), { d
   box-shadow: 0 4px 9px rgba(0,0,0,0.15);
   box-sizing: border-box;
 }
-.option-label { font-weight: bold; margin-bottom: 0.25rem; }
+.option-label { font-weight: bold; margin-bottom: 0.25rem; text-shadow: 0 1px 0 rgba(255,255,255,0.7); }
 .ball-count {
   position: absolute;
   top: -1.2rem;
