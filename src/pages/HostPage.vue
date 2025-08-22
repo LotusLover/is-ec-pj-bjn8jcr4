@@ -19,7 +19,6 @@ const {
   loadThemeOrder,
   saveThemeOrder,
   saveCurrentTheme,
-  loadCurrentTheme,
 } = useFirestore(pollId, theme);
 
 const options = ref<string[]>([]);
