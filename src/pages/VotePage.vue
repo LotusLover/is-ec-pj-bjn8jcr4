@@ -5,14 +5,13 @@ import KaedeVote from '../components/Kaede_Vote.vue';
 function openHostInNewWindow() {
   if (typeof window === 'undefined') return;
   try {
-    const url = new URL(window.location.href);
-    url.hash = '#/host';
-    const w = window.open(url.toString(), '_blank', 'noopener,noreferrer');
+  const external = 'https://lotuslover.github.io/is-ec-pj-bjn8jcr4/#/host';
+  const w = window.open(external, '_blank', 'noopener,noreferrer');
     // ポップアップブロックやサンドボックスで弾かれる場合はアンカー擬似クリックで再試行
     if (!w) {
       try {
         const a = document.createElement('a');
-        a.href = '#/host';
+        a.href = external;
         a.target = '_blank';
         a.rel = 'noopener noreferrer';
         document.body.appendChild(a);
@@ -20,11 +19,11 @@ function openHostInNewWindow() {
         a.remove();
       } catch {}
       // 最終フォールバック：同タブ遷移
-      try { window.location.hash = '#/host'; } catch {}
+      try { window.location.href = external; } catch {}
     }
   } catch {
     // URL生成に失敗しても最低限ハッシュ遷移
-    try { window.location.hash = '#/host'; } catch {}
+    try { window.location.href = 'https://lotuslover.github.io/is-ec-pj-bjn8jcr4/#/host'; } catch {}
   }
 }
 </script>
@@ -37,7 +36,7 @@ function openHostInNewWindow() {
       <p>主催者ページへは <router-link to="/host">/host</router-link></p>
       <div class="actions">
         <button type="button" @click="openHostInNewWindow">主催者ページを別ウィンドウで開く</button>
-        <a class="btn-link" href="#/host" target="_blank" rel="noopener noreferrer">新しいタブで開く（リンク）</a>
+  <a class="btn-link" href="https://lotuslover.github.io/is-ec-pj-bjn8jcr4/#/host" target="_blank" rel="noopener noreferrer">新しいタブで開く（リンク）</a>
       </div>
     </div>
   </div>
