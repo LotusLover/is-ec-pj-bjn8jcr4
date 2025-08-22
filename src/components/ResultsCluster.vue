@@ -17,12 +17,16 @@ const emitter = ref<{ x: number; y: number }>({ x: 0, y: 0 } as any);
 
 // physics
 const physicsBalls = ref<any[][]>(props.options.map(() => []));
-const ATTRACT = 0.035;
+const ATTRACT = 0.012; // weaker pull to centers
 const DAMPING = 0.92;
 const REPULSE = 0.08;
 const PADDING = 2;
 const R_MIN = 14;
 const R_MAX = 34;
+// gentle wind to add unpredictability
+const WIND_DRIFT = 0.02;
+const WIND_MAX = 0.35;
+let wind = { x: 0, y: 0 };
 function calcRadius(power: number) {
   const chargeMax = 3000;
   const t = Math.max(0, Math.min(1, (Number(power) || 0) / chargeMax));
@@ -42,11 +46,10 @@ function ensureShape() {
 function updateEmitter() {
   const w = stageSize.value.w;
   const h = stageSize.value.h;
-  const side = Math.floor(Math.random() * 4); // 0 top, 1 right, 2 bottom, 3 left
-  if (side === 0) emitter.value = { x: Math.random() * w, y: 0 } as any;
-  else if (side === 1) emitter.value = { x: w, y: Math.random() * h } as any;
-  else if (side === 2) emitter.value = { x: Math.random() * w, y: h } as any;
-  else emitter.value = { x: 0, y: Math.random() * h } as any;
+  // pick left or right edge only for horizontal launch
+  const right = Math.random() < 0.5;
+  emitter.value = right ? ({ x: w, y: Math.random() * h } as any)
+                        : ({ x: 0, y: Math.random() * h } as any);
 }
 
 function syncPhysicsWithVotes() {
@@ -62,15 +65,14 @@ function syncPhysicsWithVotes() {
       const r = calcRadius(power);
   const cx = centers.value[idx]?.x ?? stageSize.value.w / 2;
   const cy = centers.value[idx]?.y ?? stageSize.value.h / 2;
-  // spawn from emitter with slight jitter and initial velocity toward center
+  // spawn from emitter with slight jitter and horizontal launch
   const sx = emitter.value.x + (Math.random() - 0.5) * 8;
   const sy = emitter.value.y + (Math.random() - 0.5) * 8;
-  let dx = cx - sx; let dy = cy - sy;
-  const dist = Math.hypot(dx, dy) || 1; dx /= dist; dy /= dist;
-  const speed = 5 + Math.random() * 3;
-  const jx = (Math.random() - 0.5) * 1.5;
-  const jy = (Math.random() - 0.5) * 1.5;
-  arr.push({ x: sx, y: sy, vx: dx * speed + jx, vy: dy * speed + jy, r, color });
+  const dir = emitter.value.x > (stageSize.value.w * 0.5) ? -1 : 1; // right edge -> left, left edge -> right
+  const speed = 6 + Math.random() * 3; // base horizontal speed
+  const jx = (Math.random() - 0.5) * 2.0; // slight sideways jitter
+  const jy = (Math.random() - 0.5) * 2.0; // small initial vertical jitter
+  arr.push({ x: sx, y: sy, vx: dir * speed + jx, vy: jy, r, color });
     }
     while (arr.length > targetCount) arr.pop();
   }
@@ -80,11 +82,19 @@ let rafId = 0;
 function stepPhysics() {
   const w = stageSize.value.w;
   const h = stageSize.value.h;
+  // update wind (smooth random drift)
+  wind.x += (Math.random() - 0.5) * WIND_DRIFT;
+  wind.y += (Math.random() - 0.5) * (WIND_DRIFT * 0.6);
+  wind.x = Math.max(-WIND_MAX, Math.min(WIND_MAX, wind.x));
+  wind.y = Math.max(-WIND_MAX * 0.6, Math.min(WIND_MAX * 0.6, wind.y));
   for (let idx = 0; idx < physicsBalls.value.length; idx++) {
     const arr = physicsBalls.value[idx];
     const cx = centers.value[idx]?.x ?? w / 2;
     const cy = centers.value[idx]?.y ?? h / 2;
     for (let b of arr) {
+      // wind adds unpredictability
+      b.vx += wind.x;
+      b.vy += wind.y;
       b.vx += (cx - b.x) * ATTRACT;
       b.vy += (cy - b.y) * ATTRACT;
     }
