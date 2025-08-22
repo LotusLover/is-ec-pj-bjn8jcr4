@@ -51,6 +51,8 @@ export function useFirestore(pollId: any, themeRef: any) {
 
   let unsubscribe: any = null;
   let pollTimer: any = 0;
+  // pending clientIds for optimistic local votes
+  const pendingClientIds = new Set<string>();
 
   async function connectRealtime() {
     if (unsubscribe) return;
@@ -74,6 +76,12 @@ export function useFirestore(pollId: any, themeRef: any) {
         snap.forEach((d: any) => {
           const data = d.data();
           if (typeof data.optionIndex === 'number' && typeof data.power === 'number') {
+            // skip server doc if it's already pending locally
+            if (data.clientId && pendingClientIds.has(data.clientId)) {
+              // clear pending flag and skip adding (we already showed it locally)
+              pendingClientIds.delete(data.clientId);
+              return;
+            }
             if (!arrs[data.optionIndex]) arrs[data.optionIndex] = [];
             // preserve per-vote color if present
             arrs[data.optionIndex].push({ power: data.power, color: data.color || null });
@@ -115,6 +123,7 @@ export function useFirestore(pollId: any, themeRef: any) {
         snap.forEach((d:any) => {
           const data = d.data();
           if (typeof data.optionIndex === 'number' && typeof data.power === 'number') {
+            if (data.clientId && pendingClientIds.has(data.clientId)) { pendingClientIds.delete(data.clientId); return; }
             if (!arrs[data.optionIndex]) arrs[data.optionIndex] = [];
             arrs[data.optionIndex].push({ power: data.power, color: data.color || null });
           }
@@ -124,11 +133,14 @@ export function useFirestore(pollId: any, themeRef: any) {
     }, 2000);
   }
 
-  async function addVote(optionIndex:number, power:number, color?:string) {
+  async function addVote(optionIndex:number, power:number, color?:string, clientId?:string) {
     await ensureFirestoreLite();
     const payload:any = { optionIndex, power, createdAt: serverTimestamp() };
     if (color) payload.color = color;
+    if (clientId) payload.clientId = clientId;
+    // return clientId used for dedup tracking
     await addDoc(votesColRef, payload);
+    return clientId;
   }
 
   async function resetVotes() {
@@ -172,6 +184,7 @@ export function useFirestore(pollId: any, themeRef: any) {
     saveOptionsConfig,
     resetVotes,
     ensureFirestoreLite,
+  markPendingClientId: (id:string) => { if (id) pendingClientIds.add(id); },
     isRealtimeConnected,
     connectingRealtime,
     realtimeError,

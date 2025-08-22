@@ -27,6 +27,7 @@ const {
   saveOptionsConfig,
   resetVotes: resetVotesFirestore,
   ensureFirestoreLite,
+  markPendingClientId,
   isRealtimeConnected,
   connectingRealtime,
   realtimeError,
@@ -288,15 +289,18 @@ const endCharge = async () => {
   const idx = selectedIdx.value;
   // 集合点モデルではオーバーレイ飛翔は行わない
   try {
-  // Firestore へ投票を書き込む（composable 経由）
-  await addVote(idx, power, ballColor.value);
+    // クライアント側で一意な id を作成して optimistic 表示とサーバー同期の重複を防ぐ
+    const clientId = 'c_' + Math.random().toString(36).slice(2, 9);
+    // ローカルにオブジェクトで即時表示（互換性のため number も許容）
+    votes.value[idx].push({ power, color: ballColor.value, clientId });
+    // composable に pending を登録
+    try { if (typeof markPendingClientId === 'function') markPendingClientId(clientId); } catch (_) {}
     // 票に対応するボールの初期位置（stage基準）と初速を算出
     const spawn = computeSpawnForVote(idx, power);
     if (spawn) pendingSpawns.value[idx].push(spawn);
-  // リアルタイム接続の有無に関係なく、即ローカル票に追加して視覚的連続性を確保
-  // ローカルにオブジェクトで即時表示（互換性のため number も許容）
-  votes.value[idx].push({ power, color: ballColor.value });
-  nextTick().then(syncPhysicsWithVotes);
+    nextTick().then(syncPhysicsWithVotes);
+    // Firestore へ投票を書き込む（composable 経由）
+    await addVote(idx, power, ballColor.value, clientId);
     // 一人一票（ローカルに記録）※開発時は無効
     if (!allowMultiVote) {
       localStorage.setItem(`kaede_vote_voted_${pollId}`, '1');
@@ -408,6 +412,8 @@ watch(votes, (newV, oldV) => {
     }
   } catch (_) {}
 }, { deep: true });
+// 票更新に合わせて物理配列を同期
+watch(votes, () => { nextTick().then(syncPhysicsWithVotes); }, { deep: true });
 
 // コメント機能
 const userMsg = ref('');
@@ -842,15 +848,15 @@ button:disabled {
   position: relative;
   margin: 0.5rem auto 0;
   width: 100%;
-  max-width: 720px;
-  min-height: 260px;
+  max-width: 1100px;
+  min-height: 160px;
   background: #e0f2f1;
   border: 1px solid #b2dfdb;
   border-radius: 10px;
   display: flex;
   flex-wrap: wrap;
   align-items: flex-start;
-  justify-content: center;
+  justify-content: space-around;
 }
 
 .ball-count.pulse {
@@ -870,12 +876,30 @@ button:disabled {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  width: 220px;
-  height: 220px;
+  width: 180px;
+  height: 160px;
   margin: 8px;
-  background: #ffffffb3;
-  border: 2px dashed #80cbc4;
   border-radius: 12px;
+  /* remove hard border/background to let balls cluster visually, keep subtle focus */
+}
+.spot::before {
+  content: '';
+  position: absolute;
+  inset: 8px;
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.02));
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.02) inset;
+  pointer-events: none;
+}
+.spot-center {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  opacity: 0.95;
 }
 .spot-center {
   position: absolute;
