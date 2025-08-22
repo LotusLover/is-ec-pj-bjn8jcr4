@@ -62,7 +62,6 @@ let rafId = 0;
 let lastTimeMs = performance.now();
 function stepPhysics() {
   const now = performance.now();
-  const dt = Math.min(0.05, (now - lastTimeMs) / 1000);
   lastTimeMs = now;
   const w = stageSize.value.w;
   const h = stageSize.value.h;
@@ -144,8 +143,8 @@ watch(() => props.optionColors, () => nextTick().then(syncPhysicsWithVotes), { d
       <div class="option-label">{{ opt }}</div>
       <div class="ball-count">{{ (votes[idx]?.length) || 0 }}票</div>
     </div>
-    <div v-for="(opt, idx) in options" :key="'balls-'+idx">
-      <div v-for="(b, bi) in physicsBalls[idx]" :key="bi" class="cluster-ball"
+    <div v-for="(arr, idx) in physicsBalls" :key="'balls-'+idx">
+      <div v-for="(b, bi) in arr" :key="bi" class="cluster-ball"
            :style="{ left: b.x + 'px', top: b.y + 'px', width: (b.r*2)+'px', height: (b.r*2)+'px', backgroundColor: b.color, border: '3px solid rgba(0,0,0,0.15)' }" />
     </div>
   </div>

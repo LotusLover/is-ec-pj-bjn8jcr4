@@ -51,7 +51,7 @@ async function doResetVotes() {
 
     <section>
       <h2>選択肢と色</h2>
-      <div v-for="(opt, i) in options" :key="i" class="opt-row">
+  <div v-for="(_, i) in options" :key="i" class="opt-row">
         <input v-model="options[i]" placeholder="選択肢" />
         <input type="color" v-model="optionColors[i]" />
         <button @click="options.splice(i,1); optionColors.splice(i,1)">削除</button>
