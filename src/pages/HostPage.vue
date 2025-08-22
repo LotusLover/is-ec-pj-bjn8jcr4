@@ -38,6 +38,21 @@ async function applyOptions() {
 async function doResetVotes() {
   await resetVotes();
 }
+
+// Fullscreen presenter mode
+const isFullscreen = ref(false);
+async function toggleFullscreen() {
+  const el = document.documentElement;
+  try {
+    if (!document.fullscreenElement) {
+      await el.requestFullscreen();
+      isFullscreen.value = true;
+    } else {
+      await document.exitFullscreen();
+      isFullscreen.value = false;
+    }
+  } catch {}
+}
 </script>
 
 <template>
@@ -47,6 +62,7 @@ async function doResetVotes() {
       <label>Poll ID: <input v-model="pollId" /></label>
       <label>Theme: <input v-model="theme" /></label>
       <button @click="init">接続/再読込</button>
+      <button class="ghost" @click="toggleFullscreen">{{ isFullscreen ? 'フルスクリーン解除' : 'フルスクリーン' }}</button>
     </div>
 
     <section>
@@ -70,7 +86,9 @@ async function doResetVotes() {
 
     <section>
       <h2>結果（クラスタ表示）</h2>
-      <ResultsCluster :options="options" :votes="votes" :option-colors="safeOptionColors" />
+      <div class="presenter-area">
+        <ResultsCluster :options="options" :votes="votes" :option-colors="safeOptionColors" />
+      </div>
     </section>
 
     <p class="nav">投票ページへは <router-link to="/vote">/vote</router-link></p>
@@ -83,4 +101,7 @@ async function doResetVotes() {
 .opt-row { display:flex; gap:.5rem; align-items:center; margin:.25rem 0; }
 .actions { margin-top:.5rem; }
 .nav { margin-top: 1rem; }
+.ghost { opacity: .85; }
+.presenter-area { width: 100%; height: 80vh; display: flex; }
+.presenter-area :deep(.cluster-stage) { flex: 1; }
 </style>

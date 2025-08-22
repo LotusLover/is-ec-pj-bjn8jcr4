@@ -12,6 +12,8 @@ const stageRef = ref<HTMLElement | null>(null);
 const spotRefs = ref<HTMLElement[]>([] as any);
 const stageSize = ref({ w: 900, h: 320 });
 const centers = ref(props.options.map(() => ({ x: 0, y: 0 })));
+// Edge emitter point for "blow-out" effect
+const emitter = ref<{ x: number; y: number }>({ x: 0, y: 0 } as any);
 
 // physics
 const physicsBalls = ref<any[][]>(props.options.map(() => []));
@@ -37,6 +39,16 @@ function ensureShape() {
   }
 }
 
+function updateEmitter() {
+  const w = stageSize.value.w;
+  const h = stageSize.value.h;
+  const side = Math.floor(Math.random() * 4); // 0 top, 1 right, 2 bottom, 3 left
+  if (side === 0) emitter.value = { x: Math.random() * w, y: 0 } as any;
+  else if (side === 1) emitter.value = { x: w, y: Math.random() * h } as any;
+  else if (side === 2) emitter.value = { x: Math.random() * w, y: h } as any;
+  else emitter.value = { x: 0, y: Math.random() * h } as any;
+}
+
 function syncPhysicsWithVotes() {
   ensureShape();
   for (let idx = 0; idx < props.options.length; idx++) {
@@ -48,11 +60,17 @@ function syncPhysicsWithVotes() {
       const power = (v && typeof v === 'object') ? Number(v.power) : Number(v);
       const color = ((v && typeof v === 'object') ? v.color : null) || props.optionColors?.[idx] || '#26a69a';
       const r = calcRadius(power);
-      const cx = centers.value[idx]?.x ?? stageSize.value.w / 2;
-      const cy = centers.value[idx]?.y ?? stageSize.value.h / 2;
-      const sx = cx + (Math.random() - 0.5) * 12;
-      const sy = cy + (Math.random() - 0.5) * 12;
-      arr.push({ x: sx, y: sy, vx: 0, vy: 0, r, color });
+  const cx = centers.value[idx]?.x ?? stageSize.value.w / 2;
+  const cy = centers.value[idx]?.y ?? stageSize.value.h / 2;
+  // spawn from emitter with slight jitter and initial velocity toward center
+  const sx = emitter.value.x + (Math.random() - 0.5) * 8;
+  const sy = emitter.value.y + (Math.random() - 0.5) * 8;
+  let dx = cx - sx; let dy = cy - sy;
+  const dist = Math.hypot(dx, dy) || 1; dx /= dist; dy /= dist;
+  const speed = 5 + Math.random() * 3;
+  const jx = (Math.random() - 0.5) * 1.5;
+  const jy = (Math.random() - 0.5) * 1.5;
+  arr.push({ x: sx, y: sy, vx: dx * speed + jx, vy: dy * speed + jy, r, color });
     }
     while (arr.length > targetCount) arr.pop();
   }
@@ -113,6 +131,7 @@ function updateCenters() {
       const r = el.getBoundingClientRect();
       return { x: r.left - st.left + r.width / 2, y: r.top - st.top + r.height / 2 } as any;
     });
+    updateEmitter();
   } catch {}
 }
 
@@ -120,7 +139,7 @@ onMounted(() => {
   nextTick().then(updateCenters);
   window.addEventListener('resize', updateCenters);
   rafId = requestAnimationFrame(stepPhysics);
-  nextTick().then(syncPhysicsWithVotes);
+  nextTick().then(() => { updateEmitter(); syncPhysicsWithVotes(); });
 });
 
 onUnmounted(() => {
@@ -152,8 +171,8 @@ watch(() => props.optionColors, () => nextTick().then(syncPhysicsWithVotes), { d
   position: relative;
   margin: 0.5rem auto 0;
   width: 100%;
-  max-width: 1100px;
-  min-height: 260px;
+  max-width: none;
+  min-height: 70vh;
   padding: 18px 24px;
   background: #e0f2f1;
   border: 1px solid #b2dfdb;
@@ -169,8 +188,8 @@ watch(() => props.optionColors, () => nextTick().then(syncPhysicsWithVotes), { d
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  width: 220px;
-  height: 220px;
+  width: clamp(200px, 22vw, 320px);
+  height: clamp(200px, 22vw, 320px);
   margin: 12px;
   border-radius: 14px;
 }
