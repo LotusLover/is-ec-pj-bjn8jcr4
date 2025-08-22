@@ -351,6 +351,12 @@ onMounted(async () => {
   nextTick().then(updateCenters);
   window.addEventListener('resize', onResize);
 
+  // Firestore の軽量初期化とポーリング開始（明示的に呼び出す）
+  try {
+    await ensureFirestoreLite();
+    try { if (typeof startPollingFallback === 'function') startPollingFallback(); } catch (_) {}
+  } catch (e) { console.debug('Firestore polling start skipped', e); }
+
   // 初回ロード: Firestore に保存された選択肢があれば適用する
   try {
     const cfg = await loadOptionsConfig();
