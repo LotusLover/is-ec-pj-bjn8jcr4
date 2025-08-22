@@ -289,10 +289,14 @@ const endCharge = async () => {
   const idx = selectedIdx.value;
   // 集合点モデルではオーバーレイ飛翔は行わない
   try {
-    // クライアント側で一意な id を作成して optimistic 表示とサーバー同期の重複を防ぐ
-    const clientId = 'c_' + Math.random().toString(36).slice(2, 9);
-    // ローカルにオブジェクトで即時表示（互換性のため number も許容）
-    votes.value[idx].push({ power, color: ballColor.value, clientId });
+  // クライアント側で一意な id を作成して optimistic 表示とサーバー同期の重複を防ぐ
+  const clientId = 'c_' + Math.random().toString(36).slice(2, 9);
+  // 安全化: votes/physics arrays の長さと要素を確保
+  try { ensurePhysicsShape(); } catch (_) {}
+  if (!Array.isArray(votes.value)) votes.value = options.value.map(() => []);
+  if (!Array.isArray(votes.value[idx])) votes.value[idx] = [];
+  // ローカルにオブジェクトで即時表示（互換性のため number も許容）
+  votes.value[idx].push({ power, color: ballColor.value, clientId });
     // composable に pending を登録
     try { if (typeof markPendingClientId === 'function') markPendingClientId(clientId); } catch (_) {}
     // 票に対応するボールの初期位置（stage基準）と初速を算出
@@ -306,6 +310,7 @@ const endCharge = async () => {
         const by = spawn.y;
         const bvx = spawn.vx || 0;
         const bvy = spawn.vy || 0;
+        if (!Array.isArray(physicsBalls.value[idx])) physicsBalls.value[idx] = [];
         physicsBalls.value[idx].push({ x: bx, y: by, vx: bvx, vy: bvy, r, color: ballColor.value, clientId });
       } catch (_) {}
     }
