@@ -40,11 +40,11 @@ export function useFirestore(pollId: any, themeRef: any) {
     if (firestoreMode === 'none') {
       const mod = await import('firebase/firestore/lite');
       ({ collection, addDoc, serverTimestamp, getDocs, deleteDoc, doc, getFirestore, setDoc, getDoc, query, orderBy, limit } = mod);
-      db = getFirestore(firebaseApp);
-      updateVotesRef();
-      firestoreMode = 'lite';
-  // start lightweight polling so clients receive updates even without explicit realtime connect
-  try { startPollingFallback(); } catch (_) {}
+  db = getFirestore(firebaseApp);
+  updateVotesRef();
+  firestoreMode = 'lite';
+  // NOTE: do not auto-start polling here to avoid unexpected reads from clients
+  // Polling should be started explicitly by the app when needed via startPollingFallback()
     }
   }
 
@@ -52,6 +52,10 @@ export function useFirestore(pollId: any, themeRef: any) {
   let pollTimer: any = 0;
   // last seen timestamp (ms) to detect new documents without fetching all docs every time
   let lastSeenMs: number | null = null;
+  // diagnostic counters
+  let diagLatestCheckCount = 0;
+  let diagFullFetchCount = 0;
+  let diagReportTimer: any = null;
   // pending clientIds for optimistic local votes
   const pendingClientIds = new Set<string>();
 
@@ -73,14 +77,15 @@ export function useFirestore(pollId: any, themeRef: any) {
   function startPollingFallback() {
     isPollingFallback.value = true;
     if (pollTimer) clearInterval(pollTimer);
-    // use a longer default interval to reduce reads
+  // use a longer default interval to reduce reads
     pollTimer = setInterval(async () => {
       try {
         await ensureFirestoreLite();
         // First, fetch only the latest document's createdAt (cheap: limit 1)
         try {
           const latestQ = query(votesColRef, orderBy('createdAt', 'desc'), limit(1));
-          const latestSnap = await getDocs(latestQ);
+      const latestSnap = await getDocs(latestQ);
+      diagLatestCheckCount++;
           let newestMs: number | null = null;
           latestSnap.forEach((d:any) => {
             const data = d.data();
@@ -97,8 +102,9 @@ export function useFirestore(pollId: any, themeRef: any) {
           // if the lightweight check fails, fall back to full fetch below
         }
 
-        // Full fetch when change detected (or if lightweight check not available)
+  // Full fetch when change detected (or if lightweight check not available)
   const snap = await getDocs(votesColRef);
+  diagFullFetchCount++;
   console.debug('[useFirestore] polling full fetch, docCount=', snap.size);
         const arrs: any[] = [];
         snap.forEach((d:any) => {
@@ -118,6 +124,14 @@ export function useFirestore(pollId: any, themeRef: any) {
         votes.value = out2;
       } catch (_) {}
     }, 10000);
+    // start a diagnostic report timer (every 60s)
+    if (!diagReportTimer) {
+      diagReportTimer = setInterval(() => {
+        console.info('[useFirestore][diag] latestChecks:', diagLatestCheckCount, 'fullFetches:', diagFullFetchCount);
+        // reset counters
+        diagLatestCheckCount = 0; diagFullFetchCount = 0;
+      }, 60000);
+    }
   }
 
   async function addVote(optionIndex:number, power:number, color?:string, clientId?:string) {
