@@ -86,8 +86,6 @@ function spawnOne(idx: number) {
   const power = (v && typeof v === 'object') ? Number(v.power) : Number(v);
   const color = ((v && typeof v === 'object') ? v.color : null) || props.optionColors?.[idx] || '#26a69a';
   const r = calcRadius(power);
-  const cx = centers.value[idx]?.x ?? stageSize.value.w / 2;
-  const cy = centers.value[idx]?.y ?? stageSize.value.h / 2;
   // spawn from emitter with slight jitter and horizontal launch
   const sx = emitter.value.x + (Math.random() - 0.5) * 8;
   const sy = emitter.value.y + (Math.random() - 0.5) * 8;

@@ -28,8 +28,8 @@ const safeOptionColors = computed(() => {
 });
 
 const fsError = ref('');
-const isEmbed = window.self !== window.top;
-const isStackblitz = /stackblitz|webcontainer|blitz|vitest\.dev/.test(location.hostname);
+const isEmbed = typeof window !== 'undefined' && window.self !== window.top;
+const isStackblitz = typeof location !== 'undefined' && /stackblitz|webcontainer|blitz|vitest\.dev/.test(location.hostname);
 
 // Firestore へ接続して設定/票を取得（失敗時はメッセージ表示）
 async function init() {
@@ -73,7 +73,8 @@ async function toggleFullscreen() {
 // デモモード（埋め込み環境用の疑似票発生器）
 const demoMode = ref(false);
 const demoVotes = ref<any[][]>([]);
-const displayVotes = computed(() => demoMode.value ? demoVotes.value : votes);
+// unwrap to plain array for child prop typing
+const displayVotesArr = computed<any[][]>(() => (demoMode.value ? demoVotes.value : (votes.value || [])) as any[][]);
 let demoTimer:any = 0;
 function startDemo() {
   demoMode.value = true;
@@ -94,6 +95,13 @@ function startDemo() {
   }, 800);
 }
 function stopDemo() { demoMode.value = false; if (demoTimer) { clearInterval(demoTimer); demoTimer = 0; } }
+
+function openInNewWindow() {
+  try {
+    const base = (typeof location !== 'undefined') ? location.href.replace(/#.*$/, '') : '';
+    window.open(base + '#/host', '_blank');
+  } catch {}
+}
 </script>
 
 <template>
@@ -106,7 +114,7 @@ function stopDemo() { demoMode.value = false; if (demoTimer) { clearInterval(dem
       <button class="ghost" @click="toggleFullscreen">{{ isFullscreen ? 'フルスクリーン解除' : 'フルスクリーン' }}</button>
       <button class="ghost" v-if="!demoMode" @click="startDemo">デモモード</button>
       <button class="ghost" v-else @click="stopDemo">デモ停止</button>
-      <button class="ghost" v-if="isEmbed || isStackblitz" @click="() => window.open(location.href.replace(/#.*$/, '') + '#/host', '_blank')">外部ウィンドウで開く</button>
+  <button class="ghost" v-if="isEmbed || isStackblitz" @click="openInNewWindow">外部ウィンドウで開く</button>
     </div>
 
     <p v-if="fsError" class="warn">接続エラー: {{ fsError }}<br>
@@ -134,7 +142,7 @@ function stopDemo() { demoMode.value = false; if (demoTimer) { clearInterval(dem
     <section>
       <h2>結果（クラスタ表示）</h2>
       <div class="presenter-area">
-        <ResultsCluster :options="options" :votes="displayVotes" :option-colors="safeOptionColors" />
+  <ResultsCluster :options="options" :votes="displayVotesArr" :option-colors="safeOptionColors" />
       </div>
     </section>
 
