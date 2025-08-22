@@ -73,7 +73,8 @@ export function useFirestore(pollId: any, themeRef: any) {
           const data = d.data();
           if (typeof data.optionIndex === 'number' && typeof data.power === 'number') {
             if (!arrs[data.optionIndex]) arrs[data.optionIndex] = [];
-            arrs[data.optionIndex].push(data.power);
+            // preserve per-vote color if present
+            arrs[data.optionIndex].push({ power: data.power, color: data.color || null });
           }
         });
         // normalize to arrays
@@ -113,7 +114,7 @@ export function useFirestore(pollId: any, themeRef: any) {
           const data = d.data();
           if (typeof data.optionIndex === 'number' && typeof data.power === 'number') {
             if (!arrs[data.optionIndex]) arrs[data.optionIndex] = [];
-            arrs[data.optionIndex].push(data.power);
+            arrs[data.optionIndex].push({ power: data.power, color: data.color || null });
           }
         });
         votes.value = arrs.map((a:any) => a || []);
@@ -121,9 +122,11 @@ export function useFirestore(pollId: any, themeRef: any) {
     }, 2000);
   }
 
-  async function addVote(optionIndex:number, power:number) {
+  async function addVote(optionIndex:number, power:number, color?:string) {
     await ensureFirestoreLite();
-    await addDoc(votesColRef, { optionIndex, power, createdAt: serverTimestamp() });
+    const payload:any = { optionIndex, power, createdAt: serverTimestamp() };
+    if (color) payload.color = color;
+    await addDoc(votesColRef, payload);
   }
 
   async function resetVotes() {

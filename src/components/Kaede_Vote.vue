@@ -125,16 +125,18 @@ function syncPhysicsWithVotes() {
     // 追加（初期位置は pendingSpawn があればそれ、なければ集合点近傍）
     while (arr.length < visibleTarget) {
       const i = arr.length; // 新規のインデックス
-      const power = votes.value[idx][i];
+      const v = votes.value[idx][i];
+      const power = (v && typeof v === 'object') ? v.power : v;
+      const color = (v && typeof v === 'object') ? v.color : null;
       const r = calcRadius(power);
-  const spawn = pendingSpawns.value[idx]?.shift() || null;
+      const spawn = pendingSpawns.value[idx]?.shift() || null;
       const cx = centers.value[idx]?.x ?? stageSize.value.w / 2;
       const cy = centers.value[idx]?.y ?? stageSize.value.h / 2;
-  const sx = spawn?.x ?? (cx + (Math.random() - 0.5) * 12);
-  const sy = spawn?.y ?? (cy + (Math.random() - 0.5) * 12);
-  const svx = spawn?.vx ?? 0;
-  const svy = spawn?.vy ?? 0;
-  arr.push({ x: sx, y: sy, vx: svx, vy: svy, r });
+      const sx = spawn?.x ?? (cx + (Math.random() - 0.5) * 12);
+      const sy = spawn?.y ?? (cy + (Math.random() - 0.5) * 12);
+      const svx = spawn?.vx ?? 0;
+      const svy = spawn?.vy ?? 0;
+      arr.push({ x: sx, y: sy, vx: svx, vy: svy, r, color });
     }
     // 削除
     while (arr.length > visibleTarget) arr.pop();
@@ -285,12 +287,13 @@ const endCharge = async () => {
   // 集合点モデルではオーバーレイ飛翔は行わない
   try {
   // Firestore へ投票を書き込む（composable 経由）
-  await addVote(idx, power);
+  await addVote(idx, power, ballColor.value);
     // 票に対応するボールの初期位置（stage基準）と初速を算出
     const spawn = computeSpawnForVote(idx, power);
     if (spawn) pendingSpawns.value[idx].push(spawn);
   // リアルタイム接続の有無に関係なく、即ローカル票に追加して視覚的連続性を確保
-  votes.value[idx].push(power);
+  // ローカルにオブジェクトで即時表示（互換性のため number も許容）
+  votes.value[idx].push({ power, color: ballColor.value });
   nextTick().then(syncPhysicsWithVotes);
     // 一人一票（ローカルに記録）※開発時は無効
     if (!allowMultiVote) {
@@ -444,6 +447,17 @@ function fillColorsToLength(colors, len) {
   const out = new Array(len);
   for (let i = 0; i < len; i++) out[i] = colors?.[i] || defaultColor(i);
   return out;
+}
+
+// 色を暗めにして枠線色にする（単純にRGBを係数で縮小）
+function darkenHex(hex, amount = 0.2) {
+  try {
+    const h = (hex || '').replace('#', '');
+    const r = Math.max(0, Math.min(255, Math.floor(parseInt(h.substring(0,2),16) * (1 - amount))));
+    const g = Math.max(0, Math.min(255, Math.floor(parseInt(h.substring(2,4),16) * (1 - amount))));
+    const b = Math.max(0, Math.min(255, Math.floor(parseInt(h.substring(4,6),16) * (1 - amount))));
+    return '#' + [r,g,b].map(v => v.toString(16).padStart(2,'0')).join('');
+  } catch (_) { return hex || '#000'; }
 }
 
 // saveOptionsConfig/loadOptionsConfig/saveOptionColors は composable を使用する
@@ -600,7 +614,7 @@ function computeSpawnForVote(idx, power) {
             v-for="(b, bi) in physicsBalls[idx]"
             :key="bi"
             class="cluster-ball"
-            :style="{ left: b.x + 'px', top: b.y + 'px', width: (b.r*2) + 'px', height: (b.r*2) + 'px', backgroundColor: ballColor }"
+            :style="{ left: b.x + 'px', top: b.y + 'px', width: (b.r*2) + 'px', height: (b.r*2) + 'px', backgroundColor: (b.color || ballColor), border: '3px solid ' + darkenHex(optionColors[idx] || defaultPalette[idx % defaultPalette.length], 0.22), boxShadow: '0 1px 3px rgba(0,0,0,0.15)'}"
           ></div>
           <!-- 押下中のプレビュー（ステージ基準の位置で表示） -->
           <div
@@ -612,7 +626,8 @@ function computeSpawnForVote(idx, power) {
               width: (calcRadius(chargeValue) * 2) + 'px',
               height: (calcRadius(chargeValue) * 2) + 'px',
               opacity: 0.5,
-              backgroundColor: ballColor
+              backgroundColor: ballColor,
+              border: '3px solid ' + darkenHex(optionColors[idx] || defaultPalette[idx % defaultPalette.length], 0.22)
             }"
           ></div>
         </div>
@@ -795,6 +810,15 @@ button:disabled {
   background: #80cbc4;
   transform: translate(-50%, -50%);
   pointer-events: none;
+}
+
+/* クラスタ内のボール（物理表示） */
+.cluster-ball {
+  position: absolute;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  box-sizing: border-box; /* border を含めてサイズ管理 */
+  transition: left 0.12s linear, top 0.12s linear;
 }
 
 /* 集合ステージ全体 */
