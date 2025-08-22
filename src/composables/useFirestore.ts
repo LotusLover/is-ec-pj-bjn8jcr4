@@ -172,7 +172,13 @@ export function useFirestore(pollId: any, themeRef: any) {
   if (themeRef && typeof themeRef === 'object' && 'value' in themeRef) {
     watch(themeRef, () => {
       updateVotesRef();
-      // optionally restart connections in caller
+      // caller can restart polling if needed
+    });
+  }
+  if (pollId && typeof pollId === 'object' && 'value' in pollId) {
+    watch(pollId, () => {
+      updateVotesRef();
+      // caller can restart polling if needed
     });
   }
 

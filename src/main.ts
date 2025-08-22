@@ -1,4 +1,5 @@
 import { createApp } from 'vue'
+import { router } from './router'
 import './style.css'
 import App from './App.vue'
 
@@ -17,7 +18,7 @@ if (!isEmbedded && isAllowedHost) {
 	console.debug('Analytics disabled in embedded or non-allowed host environment', { isEmbedded, hostname: location.hostname });
 }
 
-createApp(App).mount('#app')
+createApp(App).use(router).mount('#app')
 
 // StackBlitz 等の埋め込み環境で発生する "Could not find source file: 'stackblitz:/...'" の
 // 未処理 Promise Rejection を抑制するための雑処理ハンドラ。
