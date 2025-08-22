@@ -23,12 +23,21 @@ const safeOptionColors = computed(() => {
   return out;
 });
 
+const fsError = ref('');
+const isEmbed = window.self !== window.top;
+const isStackblitz = /stackblitz|webcontainer|blitz|vitest\.dev/.test(location.hostname);
+
 async function init() {
-  await ensureFirestoreLite();
-  startPollingFallback();
-  const cfg = await loadOptionsConfig();
-  if (cfg?.options) options.value = cfg.options;
-  if (cfg?.optionColors) optionColors.value = cfg.optionColors;
+  fsError.value = '';
+  try {
+    await ensureFirestoreLite();
+    startPollingFallback();
+    const cfg = await loadOptionsConfig();
+    if (cfg?.options) options.value = cfg.options;
+    if (cfg?.optionColors) optionColors.value = cfg.optionColors;
+  } catch (e:any) {
+    fsError.value = e?.message || String(e || 'Firestoreの初期化で問題が発生しました');
+  }
 }
 init();
 
@@ -53,6 +62,31 @@ async function toggleFullscreen() {
     }
   } catch {}
 }
+
+// Demo mode (simulated votes) for sandbox/embedded environments
+const demoMode = ref(false);
+const demoVotes = ref<any[][]>([]);
+const displayVotes = computed(() => demoMode.value ? demoVotes.value : votes);
+let demoTimer:any = 0;
+function startDemo() {
+  demoMode.value = true;
+  if (demoTimer) clearInterval(demoTimer);
+  demoVotes.value = options.value.map(() => []);
+  demoTimer = setInterval(() => {
+    if (!options.value.length) return;
+    // randomly add a vote to one option
+    const idx = Math.floor(Math.random() * options.value.length);
+    const power = 500 + Math.random() * 2500;
+    const color = (optionColors.value && optionColors.value[idx]) || '#26a69a';
+    if (!demoVotes.value[idx]) demoVotes.value[idx] = [];
+    demoVotes.value[idx] = [...demoVotes.value[idx], { power, color }];
+    // occasionally decay to avoid unbounded growth
+    for (let i = 0; i < demoVotes.value.length; i++) {
+      if (demoVotes.value[i] && demoVotes.value[i].length > 120) demoVotes.value[i].splice(0, 10);
+    }
+  }, 800);
+}
+function stopDemo() { demoMode.value = false; if (demoTimer) { clearInterval(demoTimer); demoTimer = 0; } }
 </script>
 
 <template>
@@ -63,7 +97,13 @@ async function toggleFullscreen() {
       <label>Theme: <input v-model="theme" /></label>
       <button @click="init">接続/再読込</button>
       <button class="ghost" @click="toggleFullscreen">{{ isFullscreen ? 'フルスクリーン解除' : 'フルスクリーン' }}</button>
+      <button class="ghost" v-if="!demoMode" @click="startDemo">デモモード</button>
+      <button class="ghost" v-else @click="stopDemo">デモ停止</button>
+      <button class="ghost" v-if="isEmbed || isStackblitz" @click="() => window.open(location.href.replace(/#.*$/, '') + '#/host', '_blank')">外部ウィンドウで開く</button>
     </div>
+
+    <p v-if="fsError" class="warn">接続エラー: {{ fsError }}<br>
+      埋め込み環境（StackBlitz等）では制限で接続できない場合があります。上の「外部ウィンドウで開く」や「デモモード」をお試しください。</p>
 
     <section>
       <h2>選択肢と色</h2>
@@ -87,7 +127,7 @@ async function toggleFullscreen() {
     <section>
       <h2>結果（クラスタ表示）</h2>
       <div class="presenter-area">
-        <ResultsCluster :options="options" :votes="votes" :option-colors="safeOptionColors" />
+        <ResultsCluster :options="options" :votes="displayVotes" :option-colors="safeOptionColors" />
       </div>
     </section>
 
@@ -104,4 +144,5 @@ async function toggleFullscreen() {
 .ghost { opacity: .85; }
 .presenter-area { width: 100%; height: 80vh; display: flex; }
 .presenter-area :deep(.cluster-stage) { flex: 1; }
+.warn { background:#fff3cd; color:#5c4400; padding:.5rem .75rem; border:1px solid #ffe69c; border-radius:6px; }
 </style>
