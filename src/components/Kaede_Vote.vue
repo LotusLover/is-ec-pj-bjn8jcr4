@@ -297,7 +297,18 @@ const endCharge = async () => {
     try { if (typeof markPendingClientId === 'function') markPendingClientId(clientId); } catch (_) {}
     // 票に対応するボールの初期位置（stage基準）と初速を算出
     const spawn = computeSpawnForVote(idx, power);
-    if (spawn) pendingSpawns.value[idx].push(spawn);
+    if (spawn) {
+      pendingSpawns.value[idx].push(spawn);
+      // 即時に物理ボールを作って表示（syncPhysicsWithVotes の追加と重複しないように arr.length を先に増やす）
+      try {
+        const r = calcRadius(power);
+        const bx = spawn.x;
+        const by = spawn.y;
+        const bvx = spawn.vx || 0;
+        const bvy = spawn.vy || 0;
+        physicsBalls.value[idx].push({ x: bx, y: by, vx: bvx, vy: bvy, r, color: ballColor.value, clientId });
+      } catch (_) {}
+    }
     nextTick().then(syncPhysicsWithVotes);
     // Firestore へ投票を書き込む（composable 経由）
     await addVote(idx, power, ballColor.value, clientId);
