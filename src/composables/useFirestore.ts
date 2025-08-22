@@ -13,8 +13,7 @@ export function useFirestore(pollId: any, themeRef: any) {
   let votesColRef: any = null;
 
   // dynamic exports
-  let collection: any, addDoc: any, serverTimestamp: any, onSnapshot: any, query: any, orderBy: any, limit: any, getDocs: any, deleteDoc: any, doc: any, getFirestore: any, setDoc: any, getDoc: any;
-  let enableMultiTabIndexedDbPersistence: any;
+  let collection: any, addDoc: any, serverTimestamp: any, query: any, orderBy: any, limit: any, getDocs: any, deleteDoc: any, doc: any, getFirestore: any, setDoc: any, getDoc: any;
   let firestoreMode = 'none';
 
   function updateVotesRef() {
