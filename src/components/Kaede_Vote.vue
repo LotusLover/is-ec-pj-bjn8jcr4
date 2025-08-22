@@ -37,21 +37,19 @@ let lastTimeMs = performance.now();
 
 // 投票ボールの色（参加者が選択可能）
 const ballColor = ref('#26a69a');
-function contrastTextColor(hex?: string) {
-  try {
-    const h = (hex || '').replace('#', '');
-    const r = parseInt(h.substring(0, 2), 16);
-    const g = parseInt(h.substring(2, 4), 16);
-    const b = parseInt(h.substring(4, 6), 16);
-    const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-    return luminance > 140 ? '#000' : '#fff';
-  } catch { return '#fff'; }
-}
 const R_MIN = 14, R_MAX = 34;
 function calcRadius(power: number) {
   const t = Math.max(0, Math.min(1, power / chargeMax));
   const eased = Math.sqrt(t);
   return R_MIN + (R_MAX - R_MIN) * eased;
+}
+
+// ボタンの見た目：背景は白、文字色/枠線は選択肢ごとの色
+function buttonStyle(idx: number) {
+  const disabled = (!allowMultiVote && hasVoted.value);
+  const color = optionColors.value[idx] || '#009688';
+  if (disabled) return { background: '#eeeeee', color: '#9e9e9e', border: '1px solid #cccccc' } as Record<string, string>;
+  return { background: '#ffffff', color, border: `2px solid ${color}` } as Record<string, string>;
 }
 // 長押し開始：座標の初期化と charge の更新ループ開始
 function startCharge(idx: number, evt: any) {
@@ -174,7 +172,7 @@ onUnmounted(() => { if (rafId) cancelAnimationFrame(rafId); });
           @touchend.prevent="endCharge"
           @mousemove="onPointerMove"
           @touchmove.prevent="onPointerMove($event.touches?.[0] || $event)"
-          :style="{ background: (!allowMultiVote && hasVoted) ? '#bdbdbd' : (optionColors[idx] || '#009688'), color: (!allowMultiVote && hasVoted) ? '#fff' : contrastTextColor(optionColors[idx] || '#009688') }"
+          :style="buttonStyle(idx)"
         >{{ opt }}に力をためて投票！</button>
         <span v-if="!allowMultiVote && hasVoted">（投票済み）</span>
       </label>
@@ -196,7 +194,7 @@ onUnmounted(() => { if (rafId) cancelAnimationFrame(rafId); });
 <style scoped>
 .vote-area { padding: 2rem; border-radius: 10px; background: #6ba000; max-width: 800px; margin: auto; position: relative; }
 .options { display: flex; flex-wrap: wrap; gap: 1rem; margin-bottom: 1rem; }
-button { padding: 0.65em 1.1em; border-radius: 8px; border: none; background: #009688; color: #fff; font-weight: bold; cursor: pointer; font-size: 1rem; }
+button { padding: 0.65em 1.1em; border-radius: 8px; background: #fff; color: #009688; font-weight: bold; cursor: pointer; font-size: 1rem; }
 button:disabled { background: #bdbdbd; cursor: not-allowed; }
 .charge-bar { margin: 1rem 0; }
 .charge-label { font-size: 1rem; margin-bottom: 0.3rem; }
