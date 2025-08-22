@@ -59,10 +59,7 @@ function syncPhysicsWithVotes() {
 }
 
 let rafId = 0;
-let lastTimeMs = performance.now();
 function stepPhysics() {
-  const now = performance.now();
-  lastTimeMs = now;
   const w = stageSize.value.w;
   const h = stageSize.value.h;
   for (let idx = 0; idx < physicsBalls.value.length; idx++) {
