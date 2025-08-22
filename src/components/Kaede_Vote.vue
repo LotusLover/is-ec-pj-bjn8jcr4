@@ -87,6 +87,8 @@ const defaultPalette = ['#ef5350','#42a5f5','#66bb6a','#ffb300','#ab47bc','#26a6
 const optionColors = ref(options.value.map((_, i) => defaultPalette[i % defaultPalette.length]));
 // ユーザーが指定できるボール色（デフォルト）
 const ballColor = ref('#26a69a');
+// 票数更新の視覚フィード（各選択肢ごと）
+const countPulse = ref(options.value.map(() => false));
 
 // 背景色に対して読みやすい文字色（黒/白）を返す
 function contrastTextColor(hex) {
@@ -357,6 +359,10 @@ onUnmounted(() => {
 
 // optionsやDOM参照が変わったら中心を再計測
 watch(options, () => nextTick().then(updateCenters));
+// options が変わったら countPulse の長さも合わせる
+watch(options, (n) => {
+  countPulse.value = n.map(() => false);
+});
 watch(stageRef, () => nextTick().then(updateCenters));
 watch(spotRefs, () => nextTick().then(updateCenters), { deep: true });
 // ボール色の保存
@@ -386,6 +392,22 @@ watch(currentTheme, async (t, prev) => {
   centers.value = options.value.map(() => ({ x: 0, y: 0 }));
   if (wasRealtime) connectRealtime();
 });
+
+// votes の変化（特に length の変化）を監視して短時間のハイライトを行う
+watch(votes, (newV, oldV) => {
+  try {
+    const max = Math.max((newV || []).length, (oldV || []).length);
+    for (let i = 0; i < max; i++) {
+      const newLen = (newV?.[i]?.length) || 0;
+      const oldLen = (oldV?.[i]?.length) || 0;
+      if (newLen !== oldLen) {
+        countPulse.value[i] = true;
+        // 600ms で解除
+        setTimeout(() => { countPulse.value[i] = false; }, 600);
+      }
+    }
+  } catch (_) {}
+}, { deep: true });
 
 // コメント機能
 const userMsg = ref('');
@@ -498,35 +520,17 @@ function computeSpawnForVote(idx, power) {
     if (dx === 0 && dy === 0) {
       return { x: ctr.x, y: ctr.y, vx: 0, vy: 0 };
     }
-    const candidates = [];
-    // 左右
-    if (dx !== 0) {
-      let t = (st.left - p0x) / dx; // 左
-      let y = p0y + t * dy;
-      if (t >= 0 && t <= 1 && y >= st.top && y <= st.bottom) candidates.push({ t, x: st.left, y });
-      t = (st.right - p0x) / dx; // 右
-      y = p0y + t * dy;
-      if (t >= 0 && t <= 1 && y >= st.top && y <= st.bottom) candidates.push({ t, x: st.right, y });
-    }
-    // 上下
-    if (dy !== 0) {
-      let t = (st.top - p0y) / dy; // 上
-      let x = p0x + t * dx;
-      if (t >= 0 && t <= 1 && x >= st.left && x <= st.right) candidates.push({ t, x, y: st.top });
-      t = (st.bottom - p0y) / dy; // 下
-      x = p0x + t * dx;
-      if (t >= 0 && t <= 1 && x >= st.left && x <= st.right) candidates.push({ t, x, y: st.bottom });
-    }
-    let spawnClient;
+    // ステージ矩形への射影（外部クリックなら最も近い点に投影）
     const inside = p0x >= st.left && p0x <= st.right && p0y >= st.top && p0y <= st.bottom;
+    let spawnClient;
     if (inside) {
       spawnClient = { x: p0x, y: p0y };
-    } else if (candidates.length) {
-      candidates.sort((a, b) => a.t - b.t);
-      spawnClient = { x: candidates[0].x, y: candidates[0].y };
     } else {
-      // フォールバック: ステージ中心
-      spawnClient = { x: st.left + w / 2, y: st.top + h / 2 };
+      // clamp (射影): ステージ矩形内で最も近い点を取る
+      const cx = Math.min(Math.max(p0x, st.left), st.right);
+      const cy = Math.min(Math.max(p0y, st.top), st.bottom);
+      // もし射影点が矩形の角や辺にあり得るが、それで十分
+      spawnClient = { x: cx, y: cy };
     }
     // ステージ内側へ少しオフセット
     const dirx = (p1x - spawnClient.x);
@@ -606,7 +610,7 @@ function computeSpawnForVote(idx, power) {
         <div v-for="(opt, idx) in options" :key="'spot-' + idx" class="spot" :ref="el => (spotRefs[idx] = el)" :style="{ borderColor: optionColors[idx] || defaultPalette[idx % defaultPalette.length] }">
           <div class="spot-center" :style="{ background: optionColors[idx] || defaultPalette[idx % defaultPalette.length] }"></div>
           <div class="option-label">{{ opt }}</div>
-          <div class="ball-count">{{ (votes[idx]?.length) || 0 }}票</div>
+          <div :class="['ball-count', { 'pulse': countPulse[idx] }]">{{ (votes[idx]?.length) || 0 }}票</div>
         </div>
         <!-- 集合中のボール群 -->
         <div v-for="(opt, idx) in options" :key="'balls-' + idx">
@@ -737,7 +741,19 @@ button:disabled {
   margin-bottom: 1rem;
 }
 .option-label { font-weight: bold; margin-bottom: 0.25rem; }
-.ball-count { font-size: 0.9rem; }
+.ball-count {
+  position: absolute;
+  top: -1.2rem;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.9rem;
+  background: rgba(255,255,255,0.92);
+  padding: 2px 6px;
+  border-radius: 6px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.12);
+  color: #263238;
+  z-index: 2;
+}
 .comment-area {
   margin-top: 1rem;
 }
@@ -835,6 +851,17 @@ button:disabled {
   flex-wrap: wrap;
   align-items: flex-start;
   justify-content: center;
+}
+
+.ball-count.pulse {
+  animation: count-pulse 0.6s ease;
+}
+
+@keyframes count-pulse {
+  0% { transform: translateX(-50%) scale(1); }
+  30% { transform: translateX(-50%) scale(1.35); }
+  60% { transform: translateX(-50%) scale(0.95); }
+  100% { transform: translateX(-50%) scale(1); }
 }
 /* 集合スポット（各選択肢の中心マーカー）*/
 .spot {

@@ -44,6 +44,8 @@ export function useFirestore(pollId: any, themeRef: any) {
       db = getFirestore(firebaseApp);
       updateVotesRef();
       firestoreMode = 'lite';
+  // start lightweight polling so clients receive updates even without explicit realtime connect
+  try { startPollingFallback(); } catch (_) {}
     }
   }
 
