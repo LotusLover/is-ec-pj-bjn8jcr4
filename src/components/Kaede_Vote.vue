@@ -8,7 +8,8 @@ import { useFirestore } from '../composables/useFirestore';
 // Firestore の poll/theme。基本はホストと合わせる
 const pollId = 'default';
 const currentTheme = ref('main');
-const { addVote, loadOptionsConfig } = useFirestore(pollId, currentTheme);
+const { addVote, loadOptionsConfig, loadCurrentTheme } = useFirestore(pollId, currentTheme);
+const themeText = ref('');
 
 // 選択肢・色（ホスト側設定があればそれを上書きして使用）
 const options = ref<string[]>(['A案', 'B案', 'C案']);
@@ -142,12 +143,16 @@ onMounted(async () => {
   hasVoted.value = !allowMultiVote && localStorage.getItem(`kaede_vote_voted_${pollId}`) === '1';
   try { const saved = localStorage.getItem('kaede_ball_color'); if (saved) ballColor.value = saved; } catch {}
   try {
+    // ホストが設定した現在のテーマを追従
+    const cur = await loadCurrentTheme();
+    if (cur) currentTheme.value = cur;
     const cfg = await loadOptionsConfig();
     if (cfg?.options?.length) {
       options.value = cfg.options;
       optionColors.value = (cfg.optionColors || []).map((c: string, i: number) => c || defaultPalette[i % defaultPalette.length]);
       while (optionColors.value.length < options.value.length) optionColors.value.push(defaultPalette[optionColors.value.length % defaultPalette.length]);
     }
+    if (cfg?.themeText) themeText.value = cfg.themeText;
   } catch {}
   rafId = requestAnimationFrame(stepAnim);
 });
@@ -156,7 +161,8 @@ onUnmounted(() => { if (rafId) cancelAnimationFrame(rafId); });
 
 <template>
   <div class="vote-area" ref="containerRef">
-    <h2>力をためて投票！</h2>
+  <h2>力をためて投票！</h2>
+  <p v-if="themeText" class="theme">お題: {{ themeText }}</p>
     <div class="options">
       <label v-for="(opt, idx) in options" :key="opt + '-' + idx">
         <button
@@ -202,4 +208,5 @@ button:disabled { background: #bdbdbd; cursor: not-allowed; }
 .particle { position: absolute; background: rgba(255,255,255,0.9); border-radius: 50%; transform: translate(-50%, -50%); }
 .fly-ball { position: absolute; border-radius: 50%; border: 3px solid rgba(0,0,0,0.15); box-shadow: 0 2px 6px rgba(0,0,0,0.2); }
 .hint { margin-top: 1rem; opacity: .85; }
+.theme { margin:-.25rem 0 .5rem; font-weight: 600; }
 </style>

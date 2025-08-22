@@ -3,6 +3,7 @@ import { ref, watch } from 'vue';
 // Lightweight composable to encapsulate Firestore logic used by Kaede_Vote.vue
 export function useFirestore(pollId: any, themeRef: any) {
   const votes = ref<any[][]>([]);
+  const themeText = ref<string>('');
   const isRealtimeConnected = ref(false);
   const connectingRealtime = ref(false);
   const isPollingFallback = ref(false);
@@ -153,11 +154,13 @@ export function useFirestore(pollId: any, themeRef: any) {
     votes.value = [];
   }
 
-  async function saveOptionsConfig(optionsArr:any[], optionColors:any[]) {
+  async function saveOptionsConfig(optionsArr:any[], optionColors:any[], themeTextVal?: string) {
     await ensureFirestoreLite();
     const pid = (typeof pollId === 'string') ? pollId : pollId.value;
     const cfgRef = doc(db, 'polls', pid, 'themes', themeRef.value);
-    await setDoc(cfgRef, { options: optionsArr, optionColors, updatedAt: new Date().toISOString() }, { merge: true });
+    const payload:any = { options: optionsArr, optionColors, updatedAt: new Date().toISOString() };
+    if (themeTextVal !== undefined) payload.themeText = themeTextVal;
+    await setDoc(cfgRef, payload, { merge: true });
   }
 
   async function loadOptionsConfig() {
@@ -165,31 +168,76 @@ export function useFirestore(pollId: any, themeRef: any) {
     const pid = (typeof pollId === 'string') ? pollId : pollId.value;
     const cfgRef = doc(db, 'polls', pid, 'themes', themeRef.value);
     const snap = await getDoc(cfgRef);
-    return snap.exists() ? snap.data() : null;
+    const data = snap.exists() ? snap.data() : null;
+    if (data && data.themeText !== undefined) themeText.value = data.themeText;
+    else themeText.value = '';
+    return data;
+  }
+
+  // Theme order helpers stored at polls/{pid} document field `themeOrder: string[]`
+  async function loadThemeOrder(): Promise<string[]> {
+    await ensureFirestoreLite();
+    const pid = (typeof pollId === 'string') ? pollId : pollId.value;
+    const pollDocRef = doc(db, 'polls', pid);
+    const snap = await getDoc(pollDocRef);
+    const data:any = snap.exists() ? snap.data() : {};
+    return Array.isArray(data?.themeOrder) ? data.themeOrder as string[] : [];
+  }
+  async function saveThemeOrder(order: string[]) {
+    await ensureFirestoreLite();
+    const pid = (typeof pollId === 'string') ? pollId : pollId.value;
+    const pollDocRef = doc(db, 'polls', pid);
+    await setDoc(pollDocRef, { themeOrder: order, updatedAt: new Date().toISOString() }, { merge: true });
+  }
+
+  // Current theme at poll-level for clients to follow host selection
+  async function loadCurrentTheme(): Promise<string | null> {
+    await ensureFirestoreLite();
+    const pid = (typeof pollId === 'string') ? pollId : pollId.value;
+    const pollDocRef = doc(db, 'polls', pid);
+    const snap = await getDoc(pollDocRef);
+    const data:any = snap.exists() ? snap.data() : {};
+    return typeof data?.currentTheme === 'string' ? data.currentTheme as string : null;
+  }
+  async function saveCurrentTheme(themeId: string) {
+    await ensureFirestoreLite();
+    const pid = (typeof pollId === 'string') ? pollId : pollId.value;
+    const pollDocRef = doc(db, 'polls', pid);
+    await setDoc(pollDocRef, { currentTheme: themeId, updatedAt: new Date().toISOString() }, { merge: true });
   }
 
   // watch theme changes to update ref
   if (themeRef && typeof themeRef === 'object' && 'value' in themeRef) {
     watch(themeRef, () => {
       updateVotesRef();
+      // reset polling state for new theme
+      lastSeenMs = null;
+      votes.value = [];
       // caller can restart polling if needed
     });
   }
   if (pollId && typeof pollId === 'object' && 'value' in pollId) {
     watch(pollId, () => {
       updateVotesRef();
+      lastSeenMs = null;
+      votes.value = [];
       // caller can restart polling if needed
     });
   }
 
   return {
     votes,
+  themeText,
     connectRealtime,
     disconnectRealtime,
     addVote,
   startPollingFallback,
     loadOptionsConfig,
     saveOptionsConfig,
+  loadThemeOrder,
+  saveThemeOrder,
+  loadCurrentTheme,
+  saveCurrentTheme,
     resetVotes,
     ensureFirestoreLite,
   markPendingClientId: (id:string) => { if (id) pendingClientIds.add(id); },
