@@ -68,7 +68,8 @@ function flightDuration(power) {
 
 // 疑似物理: 各選択肢のボール群を2Dで吸引・分離
 // ステージのサイズ（境界に使用）
-const stageSize = ref({ w: 700, h: 240 });
+// デフォルトを少し広めにしておく（CSS で再計測されるが、初期レンダリング時のはみ出しを防ぐ）
+const stageSize = ref({ w: 900, h: 320 });
 const ATTRACT = 0.035;
 const DAMPING = 0.92;
 const REPULSE = 0.08;
@@ -130,8 +131,10 @@ function syncPhysicsWithVotes() {
       const i = arr.length; // 新規のインデックス
       const v = votes.value[idx][i];
       const power = (v && typeof v === 'object') ? v.power : v;
-      const color = (v && typeof v === 'object') ? v.color : null;
-      const r = calcRadius(power);
+  const color = (v && typeof v === 'object') ? v.color : null;
+  // フォールバック: ドキュメントに色指定が無い場合は選択肢の色を使う
+  const colorFinal = color || optionColors.value?.[idx] || defaultColor(idx);
+  const r = calcRadius(power);
       const spawn = pendingSpawns.value[idx]?.shift() || null;
       const cx = centers.value[idx]?.x ?? stageSize.value.w / 2;
       const cy = centers.value[idx]?.y ?? stageSize.value.h / 2;
@@ -139,7 +142,7 @@ function syncPhysicsWithVotes() {
       const sy = spawn?.y ?? (cy + (Math.random() - 0.5) * 12);
       const svx = spawn?.vx ?? 0;
       const svy = spawn?.vy ?? 0;
-      arr.push({ x: sx, y: sy, vx: svx, vy: svy, r, color });
+  arr.push({ x: sx, y: sy, vx: svx, vy: svy, r, color: colorFinal });
     }
     // 削除
     while (arr.length > visibleTarget) arr.pop();
@@ -865,13 +868,14 @@ button:disabled {
   margin: 0.5rem auto 0;
   width: 100%;
   max-width: 1100px;
-  min-height: 160px;
+  min-height: 260px; /* 底上げしてボールの高さを収めやすくする */
+  padding: 18px 24px; /* 内側の余白を増やしてボールが端で切れないように */
   background: #e0f2f1;
   border: 1px solid #b2dfdb;
   border-radius: 10px;
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-start;
+  align-items: center; /* スポットを縦方向でも中央寄せにして見た目を安定させる */
   justify-content: space-around;
 }
 
@@ -892,16 +896,16 @@ button:disabled {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  width: 180px;
-  height: 160px;
-  margin: 8px;
-  border-radius: 12px;
+  width: 220px; /* 広めにしてボールが収まる領域を確保 */
+  height: 220px;
+  margin: 12px;
+  border-radius: 14px;
   /* remove hard border/background to let balls cluster visually, keep subtle focus */
 }
 .spot::before {
   content: '';
   position: absolute;
-  inset: 8px;
+  inset: 16px; /* 内側マージンを増やしてボールがスポット端に張り付かないように */
   border-radius: 10px;
   background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.02));
   box-shadow: 0 0 0 1px rgba(0,0,0,0.02) inset;

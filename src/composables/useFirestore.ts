@@ -74,21 +74,28 @@ export function useFirestore(pollId: any, themeRef: any) {
         const arrs: any[] = [];
         // initialize based on theme config length later; for now collect into map
         snap.forEach((d: any) => {
-          const data = d.data();
-          if (typeof data.optionIndex === 'number' && typeof data.power === 'number') {
-            // skip server doc if it's already pending locally
-            if (data.clientId && pendingClientIds.has(data.clientId)) {
-              // clear pending flag and skip adding (we already showed it locally)
-              pendingClientIds.delete(data.clientId);
-              return;
+            const data = d.data();
+            // accept numeric-like values (strings) as well; ensure optionIndex/power exist
+            if (data && data.optionIndex != null && data.power != null) {
+              const idxNum = Number(data.optionIndex);
+              if (Number.isNaN(idxNum)) return;
+              // skip server doc if it's already pending locally
+              if (data.clientId && pendingClientIds.has(data.clientId)) {
+                pendingClientIds.delete(data.clientId);
+                return;
+              }
+              if (!arrs[idxNum]) arrs[idxNum] = [];
+              // coerce power to number (some legacy docs may store it as string) and preserve color/clientId
+              const powerNum = (typeof data.power === 'number') ? data.power : (Number(data.power) || 0);
+              arrs[idxNum].push({ power: powerNum, color: data.color || null, clientId: data.clientId || null });
             }
-            if (!arrs[data.optionIndex]) arrs[data.optionIndex] = [];
-            // preserve per-vote color if present
-            arrs[data.optionIndex].push({ power: data.power, color: data.color || null });
-          }
-        });
+          });
         // normalize to arrays
-        votes.value = arrs.map((a: any) => a || []);
+  // normalize: ensure contiguous array of arrays
+  const maxIdx = arrs.length - 1;
+  const out:any[] = [];
+  for (let i = 0; i <= maxIdx; i++) out[i] = arrs[i] || [];
+  votes.value = out;
       }, (err:any) => {
         realtimeError.value = 'リアルタイム接続に失敗: ' + (err?.message || err);
         if (unsubscribe) { unsubscribe(); unsubscribe = null; }
@@ -122,13 +129,19 @@ export function useFirestore(pollId: any, themeRef: any) {
         const arrs: any[] = [];
         snap.forEach((d:any) => {
           const data = d.data();
-          if (typeof data.optionIndex === 'number' && typeof data.power === 'number') {
+          if (data && data.optionIndex != null && data.power != null) {
+            const idxNum = Number(data.optionIndex);
+            if (Number.isNaN(idxNum)) return;
             if (data.clientId && pendingClientIds.has(data.clientId)) { pendingClientIds.delete(data.clientId); return; }
-            if (!arrs[data.optionIndex]) arrs[data.optionIndex] = [];
-            arrs[data.optionIndex].push({ power: data.power, color: data.color || null });
+            if (!arrs[idxNum]) arrs[idxNum] = [];
+            const powerNum = (typeof data.power === 'number') ? data.power : (Number(data.power) || 0);
+            arrs[idxNum].push({ power: powerNum, color: data.color || null, clientId: data.clientId || null });
           }
         });
-        votes.value = arrs.map((a:any) => a || []);
+  const maxIdx2 = arrs.length - 1;
+  const out2:any[] = [];
+  for (let i = 0; i <= maxIdx2; i++) out2[i] = arrs[i] || [];
+  votes.value = out2;
       } catch (_) {}
     }, 2000);
   }
