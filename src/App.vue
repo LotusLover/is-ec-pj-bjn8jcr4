@@ -7,7 +7,10 @@ const router = useRouter();
 const isEmbed = typeof window !== 'undefined' && window.self !== window.top;
 
 function go(path: '/vote' | '/host') {
+  // robust navigation fallbacks for embedded environments
   try { router.push(path); } catch {}
+  try { if (typeof location !== 'undefined') location.hash = '#' + path; } catch {}
+  try { if (isEmbed) window.open((location?.href || '') .replace(/#.*$/, '') + '#' + path, '_self'); } catch {}
 }
 
 // Optional: keyboard shortcuts for quick switching in embed
