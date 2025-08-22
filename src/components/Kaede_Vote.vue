@@ -1,19 +1,25 @@
 <script setup lang="ts">
+// 参加者ページの投票 UI：
+// - ボタン長押しで「力ため」→離した瞬間に上へ飛ぶボールをローカル表示
+// - 投票データの書き込みのみ実施（集計表示は主催者ページ）
 import { ref, onMounted, onUnmounted } from 'vue';
 import { useFirestore } from '../composables/useFirestore';
 
-// 参加者用：力ためエフェクト＋上方向への飛翔アニメのみ表示（集計は主催者ページ）
+// Firestore の poll/theme。基本はホストと合わせる
 const pollId = 'default';
 const currentTheme = ref('main');
 const { addVote, loadOptionsConfig } = useFirestore(pollId, currentTheme);
 
+// 選択肢・色（ホスト側設定があればそれを上書きして使用）
 const options = ref<string[]>(['A案', 'B案', 'C案']);
 const defaultPalette = ['#ef5350','#42a5f5','#66bb6a','#ffb300','#ab47bc','#26a69a','#8d6e63','#26c6da'];
 const optionColors = ref<string[]>(options.value.map((_, i) => defaultPalette[i % defaultPalette.length]));
 
+// 単票制にしたい場合は false。ローカルストレージで既投票の有無を保持
 const allowMultiVote = true;
 const hasVoted = ref(false);
 
+// 長押し状態/値、選択中の選択肢
 const charging = ref(false);
 const chargeValue = ref(0);
 const chargeStart = ref(0);
@@ -22,11 +28,13 @@ const selectedIdx = ref<number | null>(null);
 
 const containerRef = ref<HTMLElement | null>(null);
 const lastPointerOverlay = ref({ x: 0, y: 0 });
+// 視覚効果用のパーティクルと飛翔ボール
 const particles = ref<any[]>([]);
 const flyBalls = ref<any[]>([]);
 let particleAcc = 0;
 let lastTimeMs = performance.now();
 
+// 投票ボールの色（参加者が選択可能）
 const ballColor = ref('#26a69a');
 function contrastTextColor(hex?: string) {
   try {
@@ -44,6 +52,7 @@ function calcRadius(power: number) {
   const eased = Math.sqrt(t);
   return R_MIN + (R_MAX - R_MIN) * eased;
 }
+// 長押し開始：座標の初期化と charge の更新ループ開始
 function startCharge(idx: number, evt: any) {
   if (!allowMultiVote && hasVoted.value) return;
   charging.value = true;
@@ -59,6 +68,7 @@ function startCharge(idx: number, evt: any) {
   } catch {}
   requestAnimationFrame(chargeTick);
 }
+// 長押し中のポインタ移動でパーティクルの発生位置を更新
 function onPointerMove(evt: any) {
   if (!charging.value) return;
   try {
@@ -69,6 +79,7 @@ function onPointerMove(evt: any) {
     if (c) lastPointerOverlay.value = { x: ex - c.left, y: ey - c.top };
   } catch {}
 }
+// 長押し中は chargeValue を経過時間で更新
 function chargeTick() {
   if (!charging.value) return;
   const now = Date.now();
@@ -77,6 +88,7 @@ function chargeTick() {
   chargeValue.value = val;
   requestAnimationFrame(chargeTick);
 }
+// 指を離したら投票：ローカルに飛翔ボールを生成し、Firestore へ書き込み
 async function endCharge() {
   if (!charging.value || selectedIdx.value === null) return;
   charging.value = false;
@@ -98,6 +110,7 @@ async function endCharge() {
   finally { selectedIdx.value = null; chargeValue.value = 0; }
 }
 let rafId = 0;
+// 毎フレーム、パーティクルと飛翔ボールを更新
 function stepAnim() {
   const now = performance.now();
   const dt = Math.min(0.05, (now - lastTimeMs) / 1000);
@@ -124,6 +137,7 @@ function stepAnim() {
   }
   rafId = requestAnimationFrame(stepAnim);
 }
+// 初期化：色と選択肢のロード、アニメ開始
 onMounted(async () => {
   hasVoted.value = !allowMultiVote && localStorage.getItem(`kaede_vote_voted_${pollId}`) === '1';
   try { const saved = localStorage.getItem('kaede_ball_color'); if (saved) ballColor.value = saved; } catch {}

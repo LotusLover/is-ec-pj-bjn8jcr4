@@ -1,4 +1,7 @@
 <script setup lang="ts">
+// 主催者ページ：
+// - Firestore から票を読み、クラスタ可視化へ渡す
+// - StackBlitz 等の埋め込み環境向けに外部ウィンドウ起動やデモモードを用意
 import { ref, computed } from 'vue';
 import { useFirestore } from '../composables/useFirestore';
 import ResultsCluster from '../components/ResultsCluster.vue';
@@ -16,6 +19,7 @@ const {
 
 const options = ref<string[]>([]);
 const optionColors = ref<string[]>([]);
+// 選択肢数に合わせて不足色を安全に埋める
 const safeOptionColors = computed(() => {
   const arr = optionColors.value || [];
   const out: string[] = new Array(options.value.length);
@@ -27,6 +31,7 @@ const fsError = ref('');
 const isEmbed = window.self !== window.top;
 const isStackblitz = /stackblitz|webcontainer|blitz|vitest\.dev/.test(location.hostname);
 
+// Firestore へ接続して設定/票を取得（失敗時はメッセージ表示）
 async function init() {
   fsError.value = '';
   try {
@@ -41,14 +46,16 @@ async function init() {
 }
 init();
 
+// 選択肢と色を保存
 async function applyOptions() {
   await saveOptionsConfig(options.value, optionColors.value);
 }
+// 全票を削除
 async function doResetVotes() {
   await resetVotes();
 }
 
-// Fullscreen presenter mode
+// Fullscreen presenter mode（配信用の全画面切替）
 const isFullscreen = ref(false);
 async function toggleFullscreen() {
   const el = document.documentElement;
@@ -63,7 +70,7 @@ async function toggleFullscreen() {
   } catch {}
 }
 
-// Demo mode (simulated votes) for sandbox/embedded environments
+// デモモード（埋め込み環境用の疑似票発生器）
 const demoMode = ref(false);
 const demoVotes = ref<any[][]>([]);
 const displayVotes = computed(() => demoMode.value ? demoVotes.value : votes);

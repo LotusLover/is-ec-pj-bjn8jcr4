@@ -1,4 +1,8 @@
 <script setup lang="ts">
+// 結果のクラスタ可視化：
+// - 各選択肢ごとにボールをクラスタ表示
+// - ボールは画面端のエミッタから水平に連続噴出し、弱い吸引＋風ノイズで揺らぐ
+// - 読みにくい軌道と、楽しげな演出を両立
 import { onMounted, onUnmounted, ref, watch, nextTick } from 'vue';
 
 const props = defineProps<{
@@ -8,25 +12,30 @@ const props = defineProps<{
 }>();
 
 // stage & layout
+// 可視化領域や各スポット（選択肢の中心）を追跡する
 const stageRef = ref<HTMLElement | null>(null);
 const spotRefs = ref<HTMLElement[]>([] as any);
 const stageSize = ref({ w: 900, h: 320 });
 const centers = ref(props.options.map(() => ({ x: 0, y: 0 })));
-// Edge emitter point for "blow-out" effect
+// Edge emitter point for "blow-out" effect（左右端のどちらか）
 const emitter = ref<{ x: number; y: number }>({ x: 0, y: 0 } as any);
+// desired counts per option（理想のボール数）。逐次スポーンのために使用
+const desiredCounts = ref<number[]>(props.options.map(() => 0));
 
 // physics
+// 物理っぽい見た目のためのシンプルなルール群
 const physicsBalls = ref<any[][]>(props.options.map(() => []));
-const ATTRACT = 0.012; // weaker pull to centers
+const ATTRACT = 0.012; // 弱い中心吸引（読みづらさを出すため控えめに）
 const DAMPING = 0.92;
 const REPULSE = 0.08;
 const PADDING = 2;
 const R_MIN = 14;
 const R_MAX = 34;
-// gentle wind to add unpredictability
+// gentle wind（風）で予測不能感を付与
 const WIND_DRIFT = 0.02;
 const WIND_MAX = 0.35;
 let wind = { x: 0, y: 0 };
+// 投票の力（長押し時間）からボール半径を計算
 function calcRadius(power: number) {
   const chargeMax = 3000;
   const t = Math.max(0, Math.min(1, (Number(power) || 0) / chargeMax));
@@ -34,6 +43,7 @@ function calcRadius(power: number) {
   return R_MIN + (R_MAX - R_MIN) * eased;
 }
 
+// 内部配列の形状を props に同期
 function ensureShape() {
   if (physicsBalls.value.length !== props.options.length) {
     physicsBalls.value = props.options.map(() => []);
@@ -41,8 +51,12 @@ function ensureShape() {
   if (centers.value.length !== props.options.length) {
     centers.value = props.options.map(() => ({ x: 0, y: 0 }));
   }
+  if (desiredCounts.value.length !== props.options.length) {
+    desiredCounts.value = props.options.map(() => 0);
+  }
 }
 
+// エミッタ位置を左右端のいずれかにランダム配置
 function updateEmitter() {
   const w = stageSize.value.w;
   const h = stageSize.value.h;
@@ -52,17 +66,26 @@ function updateEmitter() {
                         : ({ x: 0, y: Math.random() * h } as any);
 }
 
+// 票数→理想数（desiredCounts）へ同期（実スポーンは stepPhysics で逐次）
 function syncPhysicsWithVotes() {
   ensureShape();
   for (let idx = 0; idx < props.options.length; idx++) {
-    const targetCount = props.votes?.[idx]?.length || 0;
-    const arr = physicsBalls.value[idx];
-    while (arr.length < targetCount) {
-      const i = arr.length;
-      const v = props.votes[idx][i];
-      const power = (v && typeof v === 'object') ? Number(v.power) : Number(v);
-      const color = ((v && typeof v === 'object') ? v.color : null) || props.optionColors?.[idx] || '#26a69a';
-      const r = calcRadius(power);
+    desiredCounts.value[idx] = props.votes?.[idx]?.length || 0;
+  }
+}
+
+// 指定オプション idx に対して 1 個だけスポーン
+function spawnOne(idx: number) {
+  const arr = physicsBalls.value[idx];
+  const src = props.votes?.[idx];
+  if (!src) return false;
+  const i = arr.length; // spawn next unseen vote
+  const v = src[i];
+  if (v == null) return false;
+  // ビジュアル情報（半径・色など）を票から取得
+  const power = (v && typeof v === 'object') ? Number(v.power) : Number(v);
+  const color = ((v && typeof v === 'object') ? v.color : null) || props.optionColors?.[idx] || '#26a69a';
+  const r = calcRadius(power);
   const cx = centers.value[idx]?.x ?? stageSize.value.w / 2;
   const cy = centers.value[idx]?.y ?? stageSize.value.h / 2;
   // spawn from emitter with slight jitter and horizontal launch
@@ -73,12 +96,12 @@ function syncPhysicsWithVotes() {
   const jx = (Math.random() - 0.5) * 2.0; // slight sideways jitter
   const jy = (Math.random() - 0.5) * 2.0; // small initial vertical jitter
   arr.push({ x: sx, y: sy, vx: dir * speed + jx, vy: jy, r, color });
-    }
-    while (arr.length > targetCount) arr.pop();
-  }
+  return true;
 }
 
 let rafId = 0;
+// 毎フレームの更新：
+// 1) 風の更新 2) 逐次スポーン（全体で budget=1 個）3) 吸引・反発・減衰 4) 画面境界の当たり
 function stepPhysics() {
   const w = stageSize.value.w;
   const h = stageSize.value.h;
@@ -87,6 +110,19 @@ function stepPhysics() {
   wind.y += (Math.random() - 0.5) * (WIND_DRIFT * 0.6);
   wind.x = Math.max(-WIND_MAX, Math.min(WIND_MAX, wind.x));
   wind.y = Math.max(-WIND_MAX * 0.6, Math.min(WIND_MAX * 0.6, wind.y));
+  // sequential spawning: at most one ball per frame across all options
+  let budget = 1;
+  for (let idx = 0; idx < physicsBalls.value.length && budget > 0; idx++) {
+    const arr = physicsBalls.value[idx];
+    const want = desiredCounts.value[idx] || 0;
+    if (arr.length < want) { if (spawnOne(idx)) budget--; }
+  }
+  // immediate removal if counts decreased
+  for (let idx = 0; idx < physicsBalls.value.length; idx++) {
+    const arr = physicsBalls.value[idx];
+    const want = desiredCounts.value[idx] || 0;
+    while (arr.length > want) arr.pop();
+  }
   for (let idx = 0; idx < physicsBalls.value.length; idx++) {
     const arr = physicsBalls.value[idx];
     const cx = centers.value[idx]?.x ?? w / 2;
@@ -130,6 +166,7 @@ function stepPhysics() {
   rafId = requestAnimationFrame(stepPhysics);
 }
 
+// DOM から各スポットの中心座標を測定し、表示領域サイズも更新
 function updateCenters() {
   try {
     const st = stageRef.value?.getBoundingClientRect();
@@ -145,6 +182,7 @@ function updateCenters() {
   } catch {}
 }
 
+// 初期化：レイアウト計測→ループ開始→スポーン準備
 onMounted(() => {
   nextTick().then(updateCenters);
   window.addEventListener('resize', updateCenters);
@@ -152,6 +190,7 @@ onMounted(() => {
   nextTick().then(() => { updateEmitter(); syncPhysicsWithVotes(); });
 });
 
+// 終了処理：アニメ停止とイベント解除
 onUnmounted(() => {
   if (rafId) cancelAnimationFrame(rafId);
   window.removeEventListener('resize', updateCenters);
