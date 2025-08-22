@@ -18,3 +18,19 @@ if (!isEmbedded && isAllowedHost) {
 }
 
 createApp(App).mount('#app')
+
+// StackBlitz 等の埋め込み環境で発生する "Could not find source file: 'stackblitz:/...'" の
+// 未処理 Promise Rejection を抑制するための雑処理ハンドラ。
+// 根本解決は環境側（StackBlitz）やソースマップの生成設定に依存しますが、
+// 開発時のコンソールノイズを減らすためここでフィルタします。
+window.addEventListener('unhandledrejection', (ev: PromiseRejectionEvent) => {
+	try {
+		const reason = (ev && (ev as any).reason) || '';
+		const msg = typeof reason === 'string' ? reason : (reason && reason.message) || '';
+		if (msg && (msg.includes('Could not find source file') || msg.includes('stackblitz:') || msg.includes('vite.config.ts.timestamp'))) {
+			// ブラウザのデフォルトエラーハンドリングを抑制
+			ev.preventDefault();
+			console.debug('Suppressed known StackBlitz worker error:', msg);
+		}
+	} catch (e) { /* noop */ }
+});
