@@ -13,7 +13,7 @@ export function useFirestore(pollId: any, themeRef: any) {
   let votesColRef: any = null;
 
   // dynamic exports
-  let collection: any, addDoc: any, serverTimestamp: any, onSnapshot: any, query: any, orderBy: any, getDocs: any, deleteDoc: any, doc: any, getFirestore: any, setDoc: any, getDoc: any;
+  let collection: any, addDoc: any, serverTimestamp: any, onSnapshot: any, query: any, orderBy: any, limit: any, getDocs: any, deleteDoc: any, doc: any, getFirestore: any, setDoc: any, getDoc: any;
   let enableMultiTabIndexedDbPersistence: any;
   let firestoreMode = 'none';
 
@@ -40,7 +40,7 @@ export function useFirestore(pollId: any, themeRef: any) {
     }
     if (firestoreMode === 'none') {
       const mod = await import('firebase/firestore/lite');
-      ({ collection, addDoc, serverTimestamp, getDocs, deleteDoc, doc, getFirestore, setDoc, getDoc } = mod);
+      ({ collection, addDoc, serverTimestamp, getDocs, deleteDoc, doc, getFirestore, setDoc, getDoc, query, orderBy, limit } = mod);
       db = getFirestore(firebaseApp);
       updateVotesRef();
       firestoreMode = 'lite';
@@ -51,26 +51,36 @@ export function useFirestore(pollId: any, themeRef: any) {
 
   let unsubscribe: any = null;
   let pollTimer: any = 0;
+  // last seen timestamp (ms) to detect new documents without fetching all docs every time
+  let lastSeenMs: number | null = null;
   // pending clientIds for optimistic local votes
   const pendingClientIds = new Set<string>();
 
   async function connectRealtime() {
-    if (unsubscribe) return;
+    if (unsubscribe) {
+      console.debug('[useFirestore] connectRealtime called but already subscribed');
+      return;
+    }
     connectingRealtime.value = true;
     realtimeError.value = '';
     try {
       await ensureFirestoreLite();
       if (!firebaseApp) return;
       if (firestoreMode !== 'full') {
-        const mod = await import('firebase/firestore');
-        ({ collection, addDoc, serverTimestamp, onSnapshot, query, orderBy, getDocs, deleteDoc, doc, getFirestore, setDoc, getDoc, enableMultiTabIndexedDbPersistence } = mod);
+  const mod = await import('firebase/firestore');
+  ({ collection, addDoc, serverTimestamp, onSnapshot, query, orderBy, limit, getDocs, deleteDoc, doc, getFirestore, setDoc, getDoc, enableMultiTabIndexedDbPersistence } = mod);
         db = getFirestore(firebaseApp);
         try { if (typeof enableMultiTabIndexedDbPersistence === 'function') await enableMultiTabIndexedDbPersistence(db); } catch (_) { /* noop */ }
         updateVotesRef();
         firestoreMode = 'full';
       }
       const q = query(votesColRef, orderBy('createdAt', 'asc'));
+      console.debug('[useFirestore] subscribing to realtime updates for', pollId, themeRef?.value);
       unsubscribe = onSnapshot(q, (snap: any) => {
+        try {
+          const changes = snap.docChanges();
+          console.debug('[useFirestore] onSnapshot received', { time: new Date().toISOString(), size: snap.size, changes: changes.map(c => ({ id: c.doc.id, type: c.type })) });
+        } catch (e) { console.debug('[useFirestore] onSnapshot logging failed', e); }
         const arrs: any[] = [];
         // initialize based on theme config length later; for now collect into map
         snap.forEach((d: any) => {
@@ -99,6 +109,7 @@ export function useFirestore(pollId: any, themeRef: any) {
       }, (err:any) => {
         realtimeError.value = 'リアルタイム接続に失敗: ' + (err?.message || err);
         if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+        console.warn('[useFirestore] onSnapshot error, unsubscribed, falling back to polling', err);
         startPollingFallback();
       });
       isRealtimeConnected.value = true;
@@ -113,7 +124,7 @@ export function useFirestore(pollId: any, themeRef: any) {
   }
 
   function disconnectRealtime() {
-    if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+  if (unsubscribe) { unsubscribe(); unsubscribe = null; console.debug('[useFirestore] disconnected realtime'); }
     if (pollTimer) { clearInterval(pollTimer); pollTimer = 0; }
     isRealtimeConnected.value = false;
     isPollingFallback.value = false;
@@ -122,10 +133,33 @@ export function useFirestore(pollId: any, themeRef: any) {
   function startPollingFallback() {
     isPollingFallback.value = true;
     if (pollTimer) clearInterval(pollTimer);
+    // use a longer default interval to reduce reads
     pollTimer = setInterval(async () => {
       try {
         await ensureFirestoreLite();
-        const snap = await getDocs(votesColRef);
+        // First, fetch only the latest document's createdAt (cheap: limit 1)
+        try {
+          const latestQ = query(votesColRef, orderBy('createdAt', 'desc'), limit(1));
+          const latestSnap = await getDocs(latestQ);
+          let newestMs: number | null = null;
+          latestSnap.forEach((d:any) => {
+            const data = d.data();
+            const ts = data?.createdAt;
+            if (ts && typeof ts.toMillis === 'function') newestMs = ts.toMillis();
+            else if (ts) newestMs = (new Date(ts)).getTime();
+          });
+          console.debug('[useFirestore] polling latest-check newestMs, lastSeenMs', newestMs, lastSeenMs);
+          // if nothing changed, skip full fetch
+          if (newestMs != null && newestMs === lastSeenMs) return;
+          lastSeenMs = newestMs;
+        } catch (e) {
+          console.debug('[useFirestore] polling latest-check failed, will fallback to full fetch', e);
+          // if the lightweight check fails, fall back to full fetch below
+        }
+
+        // Full fetch when change detected (or if lightweight check not available)
+  const snap = await getDocs(votesColRef);
+  console.debug('[useFirestore] polling full fetch, docCount=', snap.size);
         const arrs: any[] = [];
         snap.forEach((d:any) => {
           const data = d.data();
@@ -138,12 +172,12 @@ export function useFirestore(pollId: any, themeRef: any) {
             arrs[idxNum].push({ power: powerNum, color: data.color || null, clientId: data.clientId || null });
           }
         });
-  const maxIdx2 = arrs.length - 1;
-  const out2:any[] = [];
-  for (let i = 0; i <= maxIdx2; i++) out2[i] = arrs[i] || [];
-  votes.value = out2;
+        const maxIdx2 = arrs.length - 1;
+        const out2:any[] = [];
+        for (let i = 0; i <= maxIdx2; i++) out2[i] = arrs[i] || [];
+        votes.value = out2;
       } catch (_) {}
-    }, 2000);
+    }, 10000);
   }
 
   async function addVote(optionIndex:number, power:number, color?:string, clientId?:string) {
