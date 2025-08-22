@@ -308,7 +308,7 @@ const endCharge = async () => {
 // Firestore の購読・接続ロジックは composable に委譲されています
 
 // 起動時はローカル状態のみ（Firebaseは未接続）
-onMounted(() => {
+onMounted(async () => {
   hasVoted.value = !allowMultiVote && localStorage.getItem(`kaede_vote_voted_${pollId}`) === '1';
   // ボール色の復元
   try {
@@ -322,6 +322,27 @@ onMounted(() => {
   // 初回のセンター計測
   nextTick().then(updateCenters);
   window.addEventListener('resize', onResize);
+
+  // 初回ロード: Firestore に保存された選択肢があれば適用する
+  try {
+    const cfg = await loadOptionsConfig();
+    if (cfg && Array.isArray(cfg.options) && cfg.options.length > 0) {
+      // 選択肢・色を上書き（投票データはリアルタイム購読で取得されるためここでは票を消さない）
+      options.value = cfg.options;
+      optionColors.value = fillColorsToLength(cfg.optionColors || [], options.value.length);
+      editableOptionsText.value = options.value.join('\n');
+      // 物理配列長を合わせる
+      votes.value = options.value.map(() => []);
+      physicsBalls.value = options.value.map(() => []);
+      pendingSpawns.value = options.value.map(() => []);
+      centers.value = options.value.map(() => ({ x: 0, y: 0 }));
+      // 再計測して見た目を整える
+      await nextTick();
+      updateCenters();
+    }
+  } catch (e) {
+    console.error('初期設定の読み込みに失敗しました', e);
+  }
 });
 
 onUnmounted(() => {
@@ -343,15 +364,23 @@ watch(ballColor, (c) => {
 watch(currentTheme, async (t, prev) => {
   try { localStorage.setItem('kaede_current_theme', t || 'main'); } catch (_) {}
   // composable の参照を更新する（内部で参照を監視しているためここではロードのみ行う）
-  // 状態クリア
+  // 設定読み込み：保存された選択肢があれば適用（票データは composable で取得される）
+  const wasRealtime = isRealtimeConnected.value;
+  try {
+    const cfg = await loadOptionsConfig();
+    if (cfg && Array.isArray(cfg.options) && cfg.options.length > 0) {
+      options.value = cfg.options;
+      optionColors.value = fillColorsToLength(cfg.optionColors || [], options.value.length);
+      editableOptionsText.value = options.value.join('\n');
+    }
+  } catch (e) {
+    console.error('テーマ切替時の設定読み込みに失敗しました', e);
+  }
+  // 状態クリア（選択肢に合わせて配列長を揃える）
   votes.value = options.value.map(() => []);
   physicsBalls.value = options.value.map(() => []);
   pendingSpawns.value = options.value.map(() => []);
   centers.value = options.value.map(() => ({ x: 0, y: 0 }));
-  // リアルタイム接続を再接続する必要があるかは composable の状態を参照
-  const wasRealtime = isRealtimeConnected.value;
-  // 設定読み込み
-  await loadOptionsConfig();
   if (wasRealtime) connectRealtime();
 });
 
