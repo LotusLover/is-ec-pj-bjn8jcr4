@@ -31,6 +31,15 @@ const fsError = ref('');
 const isEmbed = typeof window !== 'undefined' && window.self !== window.top;
 const isStackblitz = typeof location !== 'undefined' && /stackblitz|webcontainer|blitz|vitest\.dev/.test(location.hostname);
 
+// フォールバック色セット（設定が無い/読めない時用）
+const fallbackColors = ['#ef5350','#42a5f5','#66bb6a','#ffb300','#ab47bc','#26a69a','#8d6e63','#26c6da'];
+function ensureOptionsFallback() {
+  if (!options.value || options.value.length === 0) options.value = ['A案','B案','C案'];
+  const out: string[] = new Array(options.value.length);
+  for (let i = 0; i < options.value.length; i++) out[i] = optionColors.value?.[i] || fallbackColors[i % fallbackColors.length];
+  optionColors.value = out;
+}
+
 // Firestore へ接続して設定/票を取得（失敗時はメッセージ表示）
 async function init() {
   fsError.value = '';
@@ -40,40 +49,30 @@ async function init() {
     const cfg = await loadOptionsConfig();
     if (cfg?.options) options.value = cfg.options;
     if (cfg?.optionColors) optionColors.value = cfg.optionColors;
+    ensureOptionsFallback();
   } catch (e:any) {
     fsError.value = e?.message || String(e || 'Firestoreの初期化で問題が発生しました');
   }
 }
-init();
 
 // 選択肢と色を保存
-async function applyOptions() {
-  await saveOptionsConfig(options.value, optionColors.value);
-}
+async function applyOptions() { await saveOptionsConfig(options.value, optionColors.value); }
 // 全票を削除
-async function doResetVotes() {
-  await resetVotes();
-}
+async function doResetVotes() { await resetVotes(); }
 
 // Fullscreen presenter mode（配信用の全画面切替）
 const isFullscreen = ref(false);
 async function toggleFullscreen() {
   const el = document.documentElement;
   try {
-    if (!document.fullscreenElement) {
-      await el.requestFullscreen();
-      isFullscreen.value = true;
-    } else {
-      await document.exitFullscreen();
-      isFullscreen.value = false;
-    }
+    if (!document.fullscreenElement) { await el.requestFullscreen(); isFullscreen.value = true; }
+    else { await document.exitFullscreen(); isFullscreen.value = false; }
   } catch {}
 }
 
 // デモモード（埋め込み環境用の疑似票発生器）
 const demoMode = ref(false);
 const demoVotes = ref<any[][]>([]);
-// unwrap to plain array for child prop typing
 const displayVotesArr = computed<any[][]>(() => (demoMode.value ? demoVotes.value : (votes.value || [])) as any[][]);
 let demoTimer:any = 0;
 function startDemo() {
@@ -82,7 +81,6 @@ function startDemo() {
   demoVotes.value = options.value.map(() => []);
   demoTimer = setInterval(() => {
     if (!options.value.length) return;
-    // randomly add a vote to one option
     const idx = Math.floor(Math.random() * options.value.length);
     const power = 500 + Math.random() * 2500;
     const color = (optionColors.value && optionColors.value[idx]) || '#26a69a';
@@ -102,6 +100,10 @@ function openInNewWindow() {
     window.open(base + '#/host', '_blank');
   } catch {}
 }
+
+// 埋め込み環境（StackBlitz など）ではデモを自動開始。通常は Firestore に接続
+if (isEmbed || isStackblitz) { ensureOptionsFallback(); setTimeout(() => startDemo(), 100); }
+else { init(); }
 </script>
 
 <template>
@@ -112,8 +114,8 @@ function openInNewWindow() {
       <label>Theme: <input v-model="theme" /></label>
       <button @click="init">接続/再読込</button>
       <button class="ghost" @click="toggleFullscreen">{{ isFullscreen ? 'フルスクリーン解除' : 'フルスクリーン' }}</button>
-      <button class="ghost" v-if="!demoMode" @click="startDemo">デモモード</button>
-      <button class="ghost" v-else @click="stopDemo">デモ停止</button>
+  <button class="ghost" v-if="!demoMode" @click="startDemo">デモモード</button>
+  <button class="ghost" v-else @click="stopDemo">デモ停止</button>
   <button class="ghost" v-if="isEmbed || isStackblitz" @click="openInNewWindow">外部ウィンドウで開く</button>
     </div>
 
@@ -121,7 +123,7 @@ function openInNewWindow() {
       埋め込み環境（StackBlitz等）では制限で接続できない場合があります。上の「外部ウィンドウで開く」や「デモモード」をお試しください。</p>
 
     <section>
-      <h2>選択肢と色</h2>
+  <h2>選択肢と色</h2>
   <div v-for="(_, i) in options" :key="i" class="opt-row">
         <input v-model="options[i]" placeholder="選択肢" />
         <input type="color" v-model="optionColors[i]" />
@@ -142,7 +144,7 @@ function openInNewWindow() {
     <section>
       <h2>結果（クラスタ表示）</h2>
       <div class="presenter-area">
-  <ResultsCluster :options="options" :votes="displayVotesArr" :option-colors="safeOptionColors" />
+        <ResultsCluster :options="options" :votes="displayVotesArr" :option-colors="safeOptionColors" />
       </div>
     </section>
 
